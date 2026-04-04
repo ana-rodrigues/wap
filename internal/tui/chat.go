@@ -203,7 +203,8 @@ func (m ChatScreen) View() string {
 	// Word wrap the input text to fit within terminal width
 	wrappedInput := softWrap(inputText, m.width)
 
-	return header + "\n" + divider + "\n" + m.viewport.View() + "\n" + inputDivider + "\n" + wrappedInput
+	// Leading newline to match spacing with Recent Chats header
+	return "\n" + header + "\n" + divider + "\n" + m.viewport.View() + "\n" + inputDivider + "\n" + wrappedInput
 }
 
 // renderMessages builds the full viewport content string from m.messages.
@@ -332,12 +333,13 @@ func softWrap(text string, maxWidth int) string {
 
 // chatViewportHeight calculates the viewport height leaving room for header + input + hint bar + status bar.
 func chatViewportHeight(total int) int {
-	const headerLines = 2  // contact name + divider
-	const inputDivider = 1 // divider above input
+	const leadingNewline = 1 // blank line before header to match Recent Chats
+	const headerLines = 2    // contact name + divider
+	const inputDivider = 1   // divider above input
 	const inputLines = 1
 	const hintBar = 3 // \n + divider + \n + hint + \n
 	const statusBar = 1
-	h := total - headerLines - inputDivider - inputLines - hintBar - statusBar
+	h := total - leadingNewline - headerLines - inputDivider - inputLines - hintBar - statusBar
 	if h < 1 {
 		return 1
 	}

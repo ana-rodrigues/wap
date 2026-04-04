@@ -46,6 +46,13 @@ func (h sectionHeader) FilterValue() string { return "" }
 func (h sectionHeader) Title() string       { return h.label }
 func (h sectionHeader) Description() string { return "" }
 
+// mainHeader is the top-level header (RECENT CHATS / ALL CONTACTS) with gray color and divider
+type mainHeader struct{ title string }
+
+func (h mainHeader) FilterValue() string { return "" }
+func (h mainHeader) Title() string       { return h.title }
+func (h mainHeader) Description() string { return "" }
+
 type showAllItem struct{}
 
 func (i showAllItem) FilterValue() string { return "" }
@@ -77,6 +84,10 @@ func (d contactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	selected := index == m.Index()
 
 	switch v := item.(type) {
+	case mainHeader:
+		fmt.Fprintln(w, "[MAINHEADER]  "+chatHeaderStyle.Render(v.Title()))
+		fmt.Fprintln(w, headerDivider.Render(strings.Repeat("─", d.width)))
+
 	case sectionHeader:
 		fmt.Fprintln(w, "  "+sectionStyle.Render(strings.ToUpper(v.label)))
 		if !d.compact {
@@ -151,7 +162,16 @@ func NewCompactContactsScreen(width, height int) ContactsScreen {
 }
 
 func newContactsScreen(width, height int, compact bool) ContactsScreen {
-	h := height - 9 // 1 heading + 1 newline + 1 buffer + 3 hint bar + 1 status + 2 padding
+	// Calculate available height for the list:
+	// - Header: 2 lines (heading + divider)
+	// - Newlines in View(): 2 lines
+	// - Footer: 5 lines (1 empty + 1 divider + 1 hint + 1 trailing newline + 1 status)
+	// - Buffer: 1 line
+	// Total: 10 lines to subtract
+	h := height - 10
+	if compact {
+		h -= 2 // search input + divider in compact view
+	}
 	if h < 1 {
 		h = 1
 	}
@@ -260,7 +280,8 @@ func (m ContactsScreen) Update(msg tea.Msg) (ContactsScreen, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		// Reduce height to account for search input in compact view
-		h := msg.Height - 9
+		// Header (2) + newlines (2) + footer (5) + buffer (1) = 10
+		h := msg.Height - 10
 		if m.compact {
 			h -= 2 // search input + divider
 		}
@@ -281,32 +302,40 @@ func (m ContactsScreen) View() string {
 	divider := headerDivider.Render(strings.Repeat("─", m.width))
 
 	if m.compact {
-		heading := headingStyle.Render("  ALL CONTACTS")
+		// Header is now part of the list via mainHeader, except during loading
 		if m.syncing {
-			return heading + "\n" + divider + "\n\n  " + m.spinner.View() + previewStyle.Render(" Loading contacts...")
+			header := chatHeaderStyle.Render("  ALL CONTACTS")
+			return "\n" + header + "\n" + divider + "\n\n  " + m.spinner.View() + previewStyle.Render(" Loading contacts...")
 		}
 		// Show search input with divider above it
 		searchDivider := headerDivider.Render(strings.Repeat("─", m.width))
 		searchInput := strings.TrimSuffix(m.search.View(), "\n")
-		return heading + "\n" + divider + "\n" + m.list.View() + "\n" + searchDivider + "\n" + searchInput
+		return "\n" + divider + "\n" + m.list.View() + "\n" + searchDivider + "\n" + searchInput
 	}
-	heading := headingStyle.Render("  RECENT CHATS")
+	// Non-compact view (Recent Chats)
 	if m.syncing {
-		return heading + "\n" + divider + "\n\n  " + m.spinner.View() + previewStyle.Render(" Loading chats...")
+		header := chatHeaderStyle.Render("  RECENT CHATS")
+		return "\n" + header + "\n" + divider + "\n\n  " + m.spinner.View() + previewStyle.Render(" Loading chats...")
 	}
-	return heading + "\n" + divider + "\n" + m.list.View()
+	// Header is now part of the list via sectionHeader, just render divider before list
+	return divider + "\n" + m.list.View()
 }
 
 // --- helpers ---
 
 func buildItems(recents, all []whatsapp.Contact) []list.Item {
 	showHeaders := len(recents) > 0 && len(all) > 0
-	items := make([]list.Item, 0, len(recents)+len(all)+3)
+	items := make([]list.Item, 0, len(recents)+len(all)+4)
+
+	// Always add main header as first item
+	// If recents is nil, this is the All Contacts (compact) view
+	title := "RECENT CHATS"
+	if recents == nil {
+		title = "ALL CONTACTS"
+	}
+	items = append(items, mainHeader{title})
 
 	if len(recents) > 0 {
-		if showHeaders {
-			items = append(items, sectionHeader{"recents"})
-		}
 		for _, c := range recents {
 			items = append(items, contactItem{c})
 		}
