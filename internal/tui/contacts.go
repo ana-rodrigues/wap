@@ -71,7 +71,7 @@ func (d contactDelegate) Height() int {
 	if d.compact {
 		return 1
 	}
-	return 2
+	return 3 // name + up to 2 wrapped preview lines
 }
 
 func (d contactDelegate) Spacing() int {
@@ -124,7 +124,28 @@ func (d contactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 				nameLine = "  " + nameStyle.Render(v.contact.DisplayName) + timestamp
 			}
 			fmt.Fprintln(w, nameLine)
-			fmt.Fprintln(w, "  "+prvStyle.Render(truncate(v.contact.LastMessage, 60)))
+
+			// Wrap preview to up to 2 lines with word breaking
+			availableWidth := d.width - 2
+			if availableWidth < 10 {
+				availableWidth = 60
+			}
+			wrapped := softWrap(v.contact.LastMessage, availableWidth)
+			lines := strings.Split(wrapped, "\n")
+
+			// Show up to 2 lines
+			for i := 0; i < len(lines) && i < 2; i++ {
+				line := lines[i]
+				// On second line, add ellipsis if there's more content
+				if i == 1 && (len(lines) > 2 || len(v.contact.LastMessage) > len(wrapped)) {
+					if len(line) > availableWidth-1 {
+						line = line[:availableWidth-1] + "…"
+					} else {
+						line = line + "…"
+					}
+				}
+				fmt.Fprintln(w, "  "+prvStyle.Render(line))
+			}
 		}
 
 	case showAllItem:
