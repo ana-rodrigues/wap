@@ -85,7 +85,7 @@ func (d contactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 
 	switch v := item.(type) {
 	case mainHeader:
-		fmt.Fprintln(w, "[MAINHEADER]  "+chatHeaderStyle.Render(v.Title()))
+		fmt.Fprintln(w, "  "+chatHeaderStyle.Render(v.Title()))
 		fmt.Fprintln(w, headerDivider.Render(strings.Repeat("─", d.width)))
 
 	case sectionHeader:
@@ -317,8 +317,8 @@ func (m ContactsScreen) View() string {
 		header := chatHeaderStyle.Render("  RECENT CHATS")
 		return "\n" + header + "\n" + divider + "\n\n  " + m.spinner.View() + previewStyle.Render(" Loading chats...")
 	}
-	// Header is now part of the list via sectionHeader, just render divider before list
-	return divider + "\n" + m.list.View()
+	// Header is now part of the list via sectionHeader, no divider needed
+	return m.list.View()
 }
 
 // --- helpers ---
