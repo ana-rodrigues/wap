@@ -327,6 +327,13 @@ func (c *Client) GetMessageHistory(jid string) []Message {
 	return result
 }
 
+// MarkRead clears the unread indicator for the given chat JID.
+func (c *Client) MarkRead(jid string) {
+	c.mu.Lock()
+	delete(c.unreadChats, jid)
+	c.mu.Unlock()
+}
+
 // SyncMessages replaces the in-memory message history for a chat with the
 // provided messages. Called when leaving a chat screen to persist the
 // accumulated messages (including sent and real-time received ones).

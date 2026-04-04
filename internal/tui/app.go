@@ -194,6 +194,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// ── Contact selected → open chat ─────────────────────────────────────────
 	case ContactSelectedMsg:
+		m.client.MarkRead(msg.Contact.JID)
 		m.chat = NewChatScreen(msg.Contact, m.client, m.noEmoji, m.width, m.height)
 		m.active = screenChat
 
@@ -252,11 +253,12 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chat, cmd = m.chat.Update(msg)
 				cmds = append(cmds, cmd)
 			}
-			// Note: the client already updates recentActivity/lastPreview
-			// in-memory on every EventMessage. The contacts list is refreshed
-			// when the user navigates back to recents (via Esc) or on
-			// EventContactsReady — NOT on every message, which would cause
-			// the spinner to stop prematurely with partial data.
+			// Refresh contacts list in real-time, but ONLY after the initial
+			// load is complete (syncing == false). This updates previews and
+			// reorders chats without interrupting the loading spinner.
+			if m.active == screenContacts && !m.contacts.compact && !m.contacts.syncing {
+				m.contacts = m.contacts.Populate(m.client.RecentChats(5), nil)
+			}
 		}
 
 	// ── Reconnect animation tick ──────────────────────────────────────────────

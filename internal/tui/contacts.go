@@ -20,13 +20,15 @@ type ContactSelectedMsg struct {
 }
 
 var (
-	headingStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Bold(true)
-	dividerStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#004D20"))
-	sectionStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#004D20")).Bold(true)
-	contactNameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
-	previewStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
-	selectedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676"))
-	showAllStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+	headingStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Bold(true)
+	dividerStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#004D20"))
+	sectionStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#004D20")).Bold(true)
+	contactNameStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+	previewStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
+	selectedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676"))
+	showAllStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+	unreadNameStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676")).Bold(true)
+	unreadPreviewStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#aaaaaa")).Bold(true)
 )
 
 // --- list item types ---
@@ -95,14 +97,23 @@ func (d contactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 			if ts != "" {
 				timestamp = previewStyle.Render(" [" + ts + "]")
 			}
+
+			nameStyle := contactNameStyle
+			prvStyle := previewStyle
+			if v.contact.Unread {
+				nameStyle = unreadNameStyle
+				prvStyle = unreadPreviewStyle
+				timestamp += " " + unreadNameStyle.Render("●")
+			}
+
 			var nameLine string
 			if selected {
 				nameLine = selectedStyle.Render("› "+v.contact.DisplayName) + timestamp
 			} else {
-				nameLine = "  " + contactNameStyle.Render(v.contact.DisplayName) + timestamp
+				nameLine = "  " + nameStyle.Render(v.contact.DisplayName) + timestamp
 			}
 			fmt.Fprintln(w, nameLine)
-			fmt.Fprintln(w, "  "+previewStyle.Render(truncate(v.contact.LastMessage, 60)))
+			fmt.Fprintln(w, "  "+prvStyle.Render(truncate(v.contact.LastMessage, 60)))
 		}
 
 	case showAllItem:
