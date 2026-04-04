@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -66,10 +67,8 @@ func (d contactDelegate) Height() int {
 }
 
 func (d contactDelegate) Spacing() int {
-	if d.compact {
-		return 0
-	}
-	return 1
+	// No spacing between items in any view for a more compact list
+	return 0
 }
 
 func (d contactDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
@@ -133,12 +132,14 @@ func (d contactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 // --- ContactsScreen ---
 
 type ContactsScreen struct {
-	list    list.Model
-	spinner spinner.Model
-	syncing bool
-	compact bool
-	width   int
-	height  int
+	list     list.Model
+	spinner  spinner.Model
+	search   textinput.Model // search input for compact view
+	syncing  bool
+	compact  bool
+	width    int
+	height   int
+	allItems []list.Item // original unfiltered items for searching
 }
 
 func NewContactsScreen(width, height int) ContactsScreen {
@@ -150,7 +151,7 @@ func NewCompactContactsScreen(width, height int) ContactsScreen {
 }
 
 func newContactsScreen(width, height int, compact bool) ContactsScreen {
-	h := height - 6 // 1 heading + 1 separator + 3 hint bar + 1 status
+	h := height - 9 // 1 heading + 1 newline + 1 buffer + 3 hint bar + 1 status + 2 padding
 	if h < 1 {
 		h = 1
 	}
@@ -160,20 +161,61 @@ func newContactsScreen(width, height int, compact bool) ContactsScreen {
 	l.SetFilteringEnabled(true)
 	l.SetShowHelp(false)
 
+	// Style the paginator to make current page white and visible
+	l.Paginator.ActiveDot = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).Render("● ")
+	l.Paginator.InactiveDot = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555")).Render("○ ")
+
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676"))
 
-	return ContactsScreen{list: l, spinner: s, syncing: true, compact: compact, width: width, height: height}
+	// Initialize search input for compact view
+	search := textinput.New()
+	search.Placeholder = "Search contacts..."
+	search.CharLimit = 256
+	// Don't focus search by default - let list be interactive with arrow keys
+	// User can still type to search (textinput captures typing automatically)
+
+	return ContactsScreen{list: l, spinner: s, search: search, syncing: true, compact: compact, width: width, height: height, allItems: []list.Item{}}
 }
 
 func (m ContactsScreen) Populate(recents, all []whatsapp.Contact) ContactsScreen {
 	// Stop the spinner once Populate is called.
 	// If we have no recents yet (e.g., reconnect without HistorySync), show an empty list
 	// so the user can still interact (open command bar, logout, quit, etc.).
-	m.list.SetItems(buildItems(recents, all))
+	items := buildItems(recents, all)
+	m.allItems = items
+	m.list.SetItems(items)
+	// Pre-select the first contact item (skip section headers)
+	if len(items) > 0 {
+		for i, item := range items {
+			if _, ok := item.(contactItem); ok {
+				m.list.Select(i)
+				break
+			}
+		}
+	}
 	m.syncing = false
 	return m
+}
+
+// filterItems returns items matching the search query
+func (m ContactsScreen) filterItems(query string) []list.Item {
+	if query == "" {
+		return m.allItems
+	}
+
+	query = strings.ToLower(query)
+	var filtered []list.Item
+
+	for _, item := range m.allItems {
+		if contact, ok := item.(contactItem); ok {
+			if strings.Contains(strings.ToLower(contact.contact.DisplayName), query) {
+				filtered = append(filtered, item)
+			}
+		}
+	}
+	return filtered
 }
 
 func (m ContactsScreen) Init() tea.Cmd {
@@ -194,6 +236,15 @@ func (m ContactsScreen) Update(msg tea.Msg) (ContactsScreen, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// In compact view, handle search input
+		if m.compact && !m.syncing && m.search.Focused() {
+			var cmd tea.Cmd
+			m.search, cmd = m.search.Update(msg)
+			// Filter list based on search query
+			m.list.SetItems(m.filterItems(m.search.Value()))
+			return m, cmd
+		}
+
 		// Don't handle contact selection while loading, but let keys bubble up
 		// to app.go so global shortcuts (Shift+Esc, Ctrl+Q) still work
 		if !m.syncing && msg.Type == tea.KeyEnter {
@@ -208,12 +259,17 @@ func (m ContactsScreen) Update(msg tea.Msg) (ContactsScreen, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		h := msg.Height - 6
+		// Reduce height to account for search input in compact view
+		h := msg.Height - 9
+		if m.compact {
+			h -= 2 // search input + divider
+		}
 		if h < 1 {
 			h = 1
 		}
 		m.list.SetDelegate(contactDelegate{width: msg.Width, compact: m.compact})
 		m.list.SetSize(msg.Width, h)
+		m.search.Width = msg.Width
 	}
 
 	var cmd tea.Cmd
@@ -222,18 +278,23 @@ func (m ContactsScreen) Update(msg tea.Msg) (ContactsScreen, tea.Cmd) {
 }
 
 func (m ContactsScreen) View() string {
+	divider := headerDivider.Render(strings.Repeat("─", m.width))
+
 	if m.compact {
 		heading := headingStyle.Render("  ALL CONTACTS")
 		if m.syncing {
-			return heading + "\n\n  " + m.spinner.View() + previewStyle.Render(" Loading contacts...")
+			return heading + "\n" + divider + "\n\n  " + m.spinner.View() + previewStyle.Render(" Loading contacts...")
 		}
-		return heading + "\n" + m.list.View()
+		// Show search input with divider above it
+		searchDivider := headerDivider.Render(strings.Repeat("─", m.width))
+		searchInput := strings.TrimSuffix(m.search.View(), "\n")
+		return heading + "\n" + divider + "\n" + m.list.View() + "\n" + searchDivider + "\n" + searchInput
 	}
 	heading := headingStyle.Render("  RECENT CHATS")
 	if m.syncing {
-		return heading + "\n\n  " + m.spinner.View() + previewStyle.Render(" Loading chats...")
+		return heading + "\n" + divider + "\n\n  " + m.spinner.View() + previewStyle.Render(" Loading chats...")
 	}
-	return heading + "\n" + m.list.View()
+	return heading + "\n" + divider + "\n" + m.list.View()
 }
 
 // --- helpers ---

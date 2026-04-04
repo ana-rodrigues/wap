@@ -300,14 +300,17 @@ func (m App) View() string {
 		footer = hint + statusBar
 	}
 
-	// Count how many lines footer takes
-	footerLines := strings.Count(footer, "\n") + 1
-	bodyLines := strings.Count(body, "\n") + 1
-	totalUsed := bodyLines + footerLines
+	// Footer is always: 1 (divider) + 1 (hint) + 1 (status) + optional cmd bar
+	footerHeight := 3
+	if m.cmdBarOpen {
+		footerHeight += 2 // command bar takes ~2 lines
+	}
 
-	// Pad body so footer is pinned to the bottom
-	if m.height > totalUsed {
-		body += strings.Repeat("\n", m.height-totalUsed)
+	// Pad body to fill available height, pushing footer to bottom
+	availableForBody := m.height - footerHeight
+	bodyLines := strings.Count(body, "\n") + 1
+	if bodyLines < availableForBody {
+		body += strings.Repeat("\n", availableForBody-bodyLines)
 	}
 
 	return body + footer

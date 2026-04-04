@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.8.27">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>wap-whatsapp-cli-design</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="wap-whatsapp-cli-design_files/libs/clipboard/clipboard.min.js"></script>
+<script src="wap-whatsapp-cli-design_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="wap-whatsapp-cli-design_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="wap-whatsapp-cli-design_files/libs/quarto-html/axe/axe-check.js" type="module"></script>
+<script src="wap-whatsapp-cli-design_files/libs/quarto-html/popper.min.js"></script>
+<script src="wap-whatsapp-cli-design_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="wap-whatsapp-cli-design_files/libs/quarto-html/anchor.min.js"></script>
+<link href="wap-whatsapp-cli-design_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="wap-whatsapp-cli-design_files/libs/quarto-html/quarto-syntax-highlighting-ed96de9b727972fe78a7b5d16c58bf87.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="wap-whatsapp-cli-design_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="wap-whatsapp-cli-design_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="wap-whatsapp-cli-design_files/libs/bootstrap/bootstrap-d6a003b94517c951b2d65075d42fb01b.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="fullcontent quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+
+
+
+<section id="whatsapp-cli-wacli-design-spec" class="level1">
+<h1>WhatsApp CLI (<code>wacli</code>) Design Spec</h1>
+<p><strong>Goal:</strong> A lightweight terminal application that lets the user authenticate with WhatsApp, select a contact, and focus on a single conversation at a time.</p>
+<p><strong>Architecture:</strong> A Bubble Tea TUI with a global command bar, backed by a whatsmeow client wrapper that communicates via Go channels. Screens are managed as a state machine in a top-level app model.</p>
+<p><strong>Tech Stack:</strong> Go, <a href="https://github.com/tulir/whatsmeow">whatsmeow</a>, <a href="https://github.com/charmbracelet/bubbletea">Bubble Tea</a>, <a href="https://github.com/charmbracelet/bubbles">Bubbles</a>, <a href="https://github.com/charmbracelet/lipgloss">Lipgloss</a>, SQLite (via whatsmeow’s sqlstore), qrterminal.</p>
+<hr>
+<section id="screen-state-machine" class="level2">
+<h2 class="anchored" data-anchor-id="screen-state-machine">Screen State Machine</h2>
+<pre><code>Auth ──(QR scanned / session loaded)──► ContactList ──(Enter)──► Chat
+                                              ▲                     │
+                                              └────────(Esc)────────┘
+
+Any screen ──(/ key)──► CommandBar overlay
+                              │
+                    (/logout + Enter)
+                              │
+                              ▼
+                           Auth (QR)</code></pre>
+<ul>
+<li><strong>Auth → ContactList:</strong> triggered when whatsmeow fires a <code>Connected</code> event after QR scan, or immediately on startup if <code>session.db</code> exists.</li>
+<li><strong>ContactList → Chat:</strong> user presses <code>Enter</code> on a contact.</li>
+<li><strong>Chat → ContactList:</strong> user presses <code>Esc</code>.</li>
+<li><strong>Any → Auth:</strong> user types <code>/logout</code> in the command bar.</li>
+</ul>
+<p>Only one conversation can be open at a time by design.</p>
+<hr>
+</section>
+<section id="components-files" class="level2">
+<h2 class="anchored" data-anchor-id="components-files">Components &amp; Files</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 28%">
+<col style="width: 71%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>File</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>main.go</code></td>
+<td>Entry point. Initialises whatsmeow client and starts Bubble Tea program.</td>
+</tr>
+<tr class="even">
+<td><code>internal/whatsapp/client.go</code></td>
+<td>Wraps whatsmeow. Exposes typed Go channels for events (messages, connection state, QR codes). Handles auth, contact fetch, send, logout.</td>
+</tr>
+<tr class="odd">
+<td><code>internal/tui/app.go</code></td>
+<td>Top-level Bubble Tea model. Owns active screen, command bar state, connection indicator animation, and screen transitions.</td>
+</tr>
+<tr class="even">
+<td><code>internal/tui/auth.go</code></td>
+<td>Auth screen. Renders QR code via qrterminal. Listens for <code>Connected</code> event to transition.</td>
+</tr>
+<tr class="odd">
+<td><code>internal/tui/contacts.go</code></td>
+<td>ContactList screen. Uses <code>bubbles/list</code> with built-in type-to-filter. Renders contact display names.</td>
+</tr>
+<tr class="even">
+<td><code>internal/tui/chat.go</code></td>
+<td>Chat screen. <code>bubbles/viewport</code> for scrollable history, <code>bubbles/textinput</code> for compose. Renders incoming messages reactively.</td>
+</tr>
+<tr class="odd">
+<td><code>internal/tui/commandbar.go</code></td>
+<td>Global command bar overlay. Activated by <code>/</code> from any screen. Dispatches recognised commands to <code>app.go</code>.</td>
+</tr>
+<tr class="even">
+<td><code>internal/emoji/mapper.go</code></td>
+<td>Fallback emoji table. Maps Unicode runes without terminal glyphs to <code>:emoji_name:</code> strings.</td>
+</tr>
+<tr class="odd">
+<td><code>store/</code></td>
+<td>SQLite session database written by whatsmeow (<code>~/.config/wacli/session.db</code>).</td>
+</tr>
+</tbody>
+</table>
+<hr>
+</section>
+<section id="whatsapp-client-internalwhatsappclient.go" class="level2">
+<h2 class="anchored" data-anchor-id="whatsapp-client-internalwhatsappclient.go">WhatsApp Client (<code>internal/whatsapp/client.go</code>)</h2>
+<p>Wraps whatsmeow and exposes a clean interface to the TUI layer:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode go code-with-copy"><code class="sourceCode go"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> Client <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    Events    <span class="op">&lt;-</span><span class="kw">chan</span> Event   <span class="co">// incoming: messages, connection state, QR codes</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">// internal whatsmeow client, store, etc.</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> EventKind <span class="dt">int</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> <span class="op">(</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    EventQRCode EventKind <span class="op">=</span> <span class="ot">iota</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    EventConnected</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    EventDisconnected</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    EventMessage</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    EventContactsReady</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="op">)</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> Event <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    Kind    EventKind</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    Payload <span class="dt">any</span>  <span class="co">// *waProto.Message, QR string, etc.</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>c <span class="op">*</span>Client<span class="op">)</span> Connect<span class="op">()</span> <span class="dt">error</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>c <span class="op">*</span>Client<span class="op">)</span> RecentChats<span class="op">(</span>limit <span class="dt">int</span><span class="op">)</span> <span class="op">[]</span>Contact            <span class="co">// ordered by last activity, tracked in-memory (whatsmeow has no chat store)</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>c <span class="op">*</span>Client<span class="op">)</span> Contacts<span class="op">()</span> <span class="op">[]</span>Contact                       <span class="co">// full contact list, alphabetical, from sqlstore contact store</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>c <span class="op">*</span>Client<span class="op">)</span> SendText<span class="op">(</span>jid <span class="dt">string</span><span class="op">,</span> text <span class="dt">string</span><span class="op">)</span> <span class="dt">error</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>c <span class="op">*</span>Client<span class="op">)</span> Logout<span class="op">()</span> <span class="dt">error</span>  <span class="co">// calls whatsmeow Logout(), deletes session.db</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The TUI never imports whatsmeow directly — it only talks to this interface.</p>
+<p><strong>Note on phone availability:</strong> whatsmeow uses WhatsApp’s multi-device protocol. After the initial QR pairing, the CLI has its own encryption keys and communicates directly with WhatsApp servers — the phone does not need to be online.</p>
+<hr>
+</section>
+<section id="tui-screens" class="level2">
+<h2 class="anchored" data-anchor-id="tui-screens">TUI Screens</h2>
+<section id="auth-screen" class="level3">
+<h3 class="anchored" data-anchor-id="auth-screen">Auth Screen</h3>
+<ul>
+<li>Renders the QR code as ASCII art using <code>qrterminal</code>.</li>
+<li>Displays “Scan with WhatsApp on your phone” below the code.</li>
+<li>whatsmeow automatically emits a new QR event when the code expires (~20s); the screen re-renders with the fresh code.</li>
+<li>On <code>EventConnected</code>, <code>app.go</code> transitions to ContactList.</li>
+</ul>
+</section>
+<section id="contactlist-screen" class="level3">
+<h3 class="anchored" data-anchor-id="contactlist-screen">ContactList Screen</h3>
+<ul>
+<li>Uses <code>bubbles/list</code> with two sections: <strong>Recents</strong> (from <code>RecentChats</code>, ordered by last activity) and <strong>All Contacts</strong> (from <code>Contacts</code>, alphabetical).</li>
+<li>Type any character to filter across both sections (built into <code>bubbles/list</code>).</li>
+<li>On <code>EventContactsReady</code> (fired after initial sync), both sections refresh.</li>
+<li>If the list is empty on first login, displays “Syncing contacts…” until the event arrives.</li>
+<li><code>Enter</code> on a contact transitions to Chat.</li>
+</ul>
+</section>
+<section id="chat-screen" class="level3">
+<h3 class="anchored" data-anchor-id="chat-screen">Chat Screen</h3>
+<ul>
+<li><code>bubbles/viewport</code> shows message history accumulated in-memory as a <code>[]Message</code> slice on the Chat model. No history is fetched from the server; history starts from the moment the conversation is opened and is discarded on <code>Esc</code>.</li>
+<li>Each message rendered as: <code>[HH:MM] You: text</code> or <code>[HH:MM] Name: text</code>.</li>
+<li>Unsupported message types (media, stickers) rendered as <code>[image]</code>, <code>[voice message]</code>, etc.</li>
+<li>Failed sends marked with <code>[!]</code> prefix on the message.</li>
+<li><code>bubbles/textinput</code> at the bottom for composing. <code>Enter</code> sends.</li>
+<li>Incoming messages for the active contact are delivered via the idiomatic Bubble Tea subscription pattern: a <code>waitForEvent</code> Cmd blocks on <code>client.Events</code> and returns a <code>tea.Msg</code> when an event arrives, keeping the event loop non-blocking.</li>
+<li><code>Esc</code> returns to ContactList; the <code>[]Message</code> slice is discarded.</li>
+</ul>
+</section>
+<section id="command-bar-overlay" class="level3">
+<h3 class="anchored" data-anchor-id="command-bar-overlay">Command Bar (<code>/</code> overlay)</h3>
+<ul>
+<li>Activated by pressing <code>/</code> from any screen.</li>
+<li>A single-line input appears at the bottom of the terminal.</li>
+<li>Recognised commands in v1:
+<ul>
+<li><code>/logout</code> — calls <code>client.Logout()</code>, deletes <code>session.db</code>, transitions to Auth.</li>
+</ul></li>
+<li>Unknown commands show a brief inline error (“Unknown command”).</li>
+<li><code>Esc</code> dismisses the command bar without action.</li>
+<li>Design is extensible: future commands (<code>/mute</code>, <code>/clear</code>) require only adding a case in <code>commandbar.go</code>.</li>
+</ul>
+<hr>
+</section>
+</section>
+<section id="session-storage" class="level2">
+<h2 class="anchored" data-anchor-id="session-storage">Session &amp; Storage</h2>
+<ul>
+<li>Session data stored at <code>~/.config/wacli/session.db</code> (SQLite, managed by whatsmeow’s <code>sqlstore</code>).</li>
+<li><strong>Startup logic:</strong>
+<ul>
+<li><code>session.db</code> exists → connect silently, skip Auth screen.</li>
+<li><code>session.db</code> missing → show Auth/QR screen.</li>
+</ul></li>
+<li><strong>Logout:</strong> <code>client.Logout()</code> signals the WhatsApp server, then <code>session.db</code> is deleted. App transitions to Auth for a fresh QR scan.</li>
+</ul>
+<hr>
+</section>
+<section id="connection-state-indicator" class="level2">
+<h2 class="anchored" data-anchor-id="connection-state-indicator">Connection State Indicator</h2>
+<ul>
+<li>A status bar line is always visible at the bottom of the screen (above the command bar when active).</li>
+<li>Normal state: blank / subtle “Connected” in muted colour.</li>
+<li>On <code>EventDisconnected</code>: displays “Reconnecting…” with an animated colour pulse.
+<ul>
+<li>Implemented via <code>tea.Tick</code> (every 100ms) advancing a frame index in <code>app.go</code>.</li>
+<li><code>lipgloss</code> cycles through an amber/orange palette per frame — same feel as the Claude Code CLI spinner.</li>
+<li>Tick is only active when connection state is <code>disconnected</code>; zero overhead otherwise.</li>
+</ul></li>
+<li>On reconnect (<code>EventConnected</code>): animation stops, indicator clears.</li>
+</ul>
+<hr>
+</section>
+<section id="emoji-handling" class="level2">
+<h2 class="anchored" data-anchor-id="emoji-handling">Emoji Handling</h2>
+<ul>
+<li>Emoji are passed through to the terminal as-is. Most modern terminal emulators render them correctly with an appropriate font (e.g.&nbsp;Noto Emoji, Apple Color Emoji).</li>
+<li>A <code>--no-emoji</code> flag forces all emoji to their <code>:shortcode:</code> text equivalents via <code>internal/emoji/mapper.go</code>. No runtime terminal introspection is attempted.</li>
+<li>Shortcode fallback is v1 scope; richer detection can be layered in v2 if needed.</li>
+</ul>
+<hr>
+</section>
+<section id="error-handling" class="level2">
+<h2 class="anchored" data-anchor-id="error-handling">Error Handling</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 47%">
+<col style="width: 52%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Scenario</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>QR code expires</td>
+<td>whatsmeow emits new QR event; Auth screen re-renders automatically</td>
+</tr>
+<tr class="even">
+<td>Connection loss</td>
+<td>Animated “Reconnecting…” indicator; whatsmeow retries automatically</td>
+</tr>
+<tr class="odd">
+<td>Send failure</td>
+<td>Message displayed with <code>[!]</code> prefix in chat</td>
+</tr>
+<tr class="even">
+<td>Empty contact list on first login</td>
+<td>“Syncing contacts…” shown until <code>EventContactsReady</code></td>
+</tr>
+<tr class="odd">
+<td>Unsupported message type</td>
+<td>Descriptive placeholder: <code>[image]</code>, <code>[voice message]</code>, <code>[sticker]</code>, etc.</td>
+</tr>
+<tr class="even">
+<td>Unknown <code>/command</code></td>
+<td>Inline error in command bar: “Unknown command”</td>
+</tr>
+</tbody>
+</table>
+<hr>
+</section>
+<section id="visual-design" class="level2">
+<h2 class="anchored" data-anchor-id="visual-design">Visual Design</h2>
+<section id="palette" class="level3">
+<h3 class="anchored" data-anchor-id="palette">Palette</h3>
+<p>Terminal background is the user’s default (no override). All chrome uses a small set of Lipgloss colours:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 30%">
+<col style="width: 35%">
+<col style="width: 35%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Role</th>
+<th>Value</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>White</td>
+<td>terminal default</td>
+<td>Message body — primary content, never overridden</td>
+</tr>
+<tr class="even">
+<td>Accent</td>
+<td><code>#00E676</code> (bright green)</td>
+<td>“You” sender name, active selection, section labels, command bar <code>/</code></td>
+</tr>
+<tr class="odd">
+<td>Gray</td>
+<td><code>#888888</code></td>
+<td>Timestamps, received sender names, placeholders, media labels</td>
+</tr>
+<tr class="even">
+<td>Subtle</td>
+<td><code>#004D20</code> (dark green)</td>
+<td>Subtle borders, section dividers</td>
+</tr>
+<tr class="odd">
+<td>Error</td>
+<td><code>#FF5252</code> (red)</td>
+<td><code>[!]</code> failed send, unknown command error</td>
+</tr>
+</tbody>
+</table>
+<p>The palette is WhatsApp-reminiscent (white terminal + bright green accents) without forcing a background colour on the user.</p>
+</section>
+<section id="message-rendering" class="level3">
+<h3 class="anchored" data-anchor-id="message-rendering">Message Rendering</h3>
+<p>Plain text lines — no bubbles. Timestamps and sender names are secondary; message body is primary:</p>
+<pre><code>11:42  You         hey, are you around?
+11:43  Ana         yes! one sec
+11:43  Ana         [image]</code></pre>
+<ul>
+<li>Timestamp: gray — fixed width, right-padded</li>
+<li>Sender name: gray for others, bright green for “You” — fixed width column so message body always starts at the same x offset</li>
+<li>Message body: white (primary content)</li>
+<li><code>[!]</code> failed sends: error red prefix</li>
+<li><code>[image]</code> / <code>[voice message]</code> placeholders: gray, italicised</li>
+</ul>
+</section>
+<section id="contactlist" class="level3">
+<h3 class="anchored" data-anchor-id="contactlist">ContactList</h3>
+<p>Two sections rendered with a muted green section label:</p>
+<pre><code>  RECENTS
+  Ana Rodrigues          hey, are you around?
+  Work Group             the doc is ready
+  
+  ALL CONTACTS
+  Bruno Silva
+  Carla Mendes</code></pre>
+<ul>
+<li>Section label: muted green, small caps style (via Lipgloss <code>Bold</code>)</li>
+<li>Selected item: bright green text, no background fill</li>
+<li>Last message preview: dim grey, truncated to terminal width</li>
+<li>Filter input (built into <code>bubbles/list</code>): shown inline at top when typing</li>
+</ul>
+</section>
+<section id="status-bar" class="level3">
+<h3 class="anchored" data-anchor-id="status-bar">Status Bar</h3>
+<p>Always visible at the bottom, one line. Normal state: empty. Disconnected state: <code>Reconnecting...</code> pulsing through <code>#004D20</code> → <code>#00E676</code> via <code>tea.Tick</code>.</p>
+</section>
+<section id="command-bar" class="level3">
+<h3 class="anchored" data-anchor-id="command-bar">Command Bar</h3>
+<p>Appears above the status bar when active. Single line with a bright green <code>/</code> prefix and white input text.</p>
+<pre><code>/ logout█</code></pre>
+</section>
+</section>
+<section id="out-of-scope-v1" class="level2">
+<h2 class="anchored" data-anchor-id="out-of-scope-v1">Out of Scope (v1)</h2>
+<ul>
+<li>Media download and open (planned v2)</li>
+<li>Group chats</li>
+<li>Read receipts / typing indicators</li>
+<li>Message search</li>
+<li>Notifications (desktop or sound)</li>
+<li>Multiple simultaneous conversations</li>
+</ul>
+</section>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

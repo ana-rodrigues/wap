@@ -2,7 +2,9 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -17,23 +19,41 @@ var (
 	authBorderStyle   = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("#004D20")).
-				Padding(0, 1)
+				Padding(0, 1, 0, 1)
 )
 
 // AuthScreen is the Bubble Tea model for the QR authentication screen.
 type AuthScreen struct {
-	qrCode string
+	qrCode      string
+	refreshedAt time.Time
 }
 
-func NewAuthScreen() AuthScreen { return AuthScreen{} }
+func NewAuthScreen() AuthScreen { return AuthScreen{refreshedAt: time.Now()} }
 
-func (m AuthScreen) Init() tea.Cmd { return nil }
+// TickMsg is sent every second to update the countdown timer
+type TickMsg struct{}
 
-func (m AuthScreen) Update(msg tea.Msg) (AuthScreen, tea.Cmd) { return m, nil }
+func (m AuthScreen) Init() tea.Cmd {
+	return tea.Tick(1*time.Second, func(time.Time) tea.Msg {
+		return TickMsg{}
+	})
+}
 
-// SetQR updates the displayed QR code.
+func (m AuthScreen) Update(msg tea.Msg) (AuthScreen, tea.Cmd) {
+	switch msg.(type) {
+	case TickMsg:
+		// Re-trigger the tick for continuous updates
+		return m, tea.Tick(1*time.Second, func(time.Time) tea.Msg {
+			return TickMsg{}
+		})
+	}
+	return m, nil
+}
+
+// SetQR updates the displayed QR code and resets the refresh timer.
 func (m AuthScreen) SetQR(code string) AuthScreen {
 	m.qrCode = code
+	m.refreshedAt = time.Now()
 	return m
 }
 
@@ -51,7 +71,7 @@ func (m AuthScreen) View() string {
 		return sb.String()
 	}
 
-	// QR code — half-block mode keeps it compact
+	// QR code — half-block mode keeps it compact, smaller size
 	var buf bytes.Buffer
 	qrterminal.GenerateWithConfig(m.qrCode, qrterminal.Config{
 		Level:      qrterminal.L,
@@ -59,19 +79,37 @@ func (m AuthScreen) View() string {
 		HalfBlocks: true,
 		BlackChar:  qrterminal.BLACK_BLACK,
 		WhiteChar:  qrterminal.WHITE_WHITE,
-		QuietZone:  1,
+		QuietZone:  0,
 	})
-	sb.WriteString(authBorderStyle.Render(buf.String()))
-	sb.WriteString("\n\n")
+	qrOutput := buf.String()
+	// Trim trailing newline from QR code
+	qrOutput = strings.TrimSuffix(qrOutput, "\n")
+
+	// Build content inside the box: QR code + instructions + countdown
+	var boxContent strings.Builder
+	boxContent.WriteString(qrOutput)
+	boxContent.WriteString("\n\n")
 
 	// Instructions
-	sb.WriteString(authStepStyle.Render("  1. Open WhatsApp on your phone"))
-	sb.WriteString("\n")
-	sb.WriteString(authStepStyle.Render("  2. Go to Settings → Linked Devices"))
-	sb.WriteString("\n")
-	sb.WriteString(authStepStyle.Render("  3. Tap \"Link a Device\" and scan the code above"))
-	sb.WriteString("\n\n")
-	sb.WriteString(authDimStyle.Render("  Code refreshes automatically every 20s"))
+	boxContent.WriteString(authStepStyle.Render("1. Open WhatsApp on your phone"))
+	boxContent.WriteString("\n")
+	boxContent.WriteString(authStepStyle.Render("2. Go to Settings → Linked Devices"))
+	boxContent.WriteString("\n")
+	boxContent.WriteString(authStepStyle.Render("3. Tap \"Link a Device\" and scan above"))
+	boxContent.WriteString("\n\n")
+
+	// Countdown timer
+	const refreshInterval = 20 * time.Second
+	elapsed := time.Since(m.refreshedAt)
+	remaining := refreshInterval - elapsed
+	if remaining < 0 {
+		remaining = 0
+	}
+	countdownSecs := int(remaining.Seconds())
+	boxContent.WriteString(authDimStyle.Render(fmt.Sprintf("Code refreshes in %ds", countdownSecs)))
+
+	// Render the entire box with border
+	sb.WriteString(authBorderStyle.Render(boxContent.String()))
 
 	return sb.String()
 }

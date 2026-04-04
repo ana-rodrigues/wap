@@ -23,12 +23,13 @@ var (
 	msgFailStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5252"))
 
 	inputPromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676"))
+	chatHeaderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Bold(true)
+	headerDivider    = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
 )
 
 const (
-	tsWidth       = 5  // "HH:MM"
-	senderWidth   = 12 // padded sender name column
-	userMsgIndent = 3  // spaces to indent user's messages
+	tsWidth     = 5  // "HH:MM"
+	senderWidth = 12 // padded sender name column
 )
 
 // WaitForEventMsg is the message returned by the waitForEvent Cmd.
@@ -57,7 +58,7 @@ func (m ChatScreen) Messages() []whatsapp.Message {
 // NewChatScreen creates a chat screen for the given contact.
 func NewChatScreen(contact whatsapp.Contact, client *whatsapp.Client, noEmoji bool, width, height int) ChatScreen {
 	ti := textinput.New()
-	ti.Placeholder = "Message..."
+	ti.Placeholder = "Your message..."
 	ti.CharLimit = 4096
 	ti.Focus()
 
@@ -165,6 +166,7 @@ func (m ChatScreen) AddSentMessage(text string) ChatScreen {
 		SenderJID:  m.selfJID,
 		SenderName: "You",
 		Body:       text,
+		IsFromMe:   true,
 		Pending:    true, // Mark as pending until server confirms
 	})
 	m.viewport.SetContent(m.renderMessages())
@@ -181,6 +183,7 @@ func (m ChatScreen) AddFailedMessage(text string) ChatScreen {
 		SenderJID:  m.selfJID,
 		SenderName: "You",
 		Body:       text,
+		IsFromMe:   true,
 		Failed:     true,
 	})
 	m.viewport.SetContent(m.renderMessages())
@@ -189,9 +192,18 @@ func (m ChatScreen) AddFailedMessage(text string) ChatScreen {
 }
 
 func (m ChatScreen) View() string {
-	prompt := inputPromptStyle.Render("> ")
-	inputLine := prompt + m.input.View()
-	return m.viewport.View() + "\n" + inputLine
+	// Build header with contact name and divider
+	header := chatHeaderStyle.Render("  " + m.contact.DisplayName)
+	divider := headerDivider.Render(strings.Repeat("─", m.width))
+
+	// Input box with divider above it
+	inputDivider := headerDivider.Render(strings.Repeat("─", m.width))
+	inputText := strings.TrimSpace(m.input.View())
+
+	// Word wrap the input text to fit within terminal width
+	wrappedInput := softWrap(inputText, m.width)
+
+	return header + "\n" + divider + "\n" + m.viewport.View() + "\n" + inputDivider + "\n" + wrappedInput
 }
 
 // renderMessages builds the full viewport content string from m.messages.
@@ -201,53 +213,131 @@ func (m ChatScreen) renderMessages() string {
 	}
 
 	var sb strings.Builder
-	for _, msg := range m.messages {
-		sb.WriteString(renderMessage(msg, m.selfJID, m.noEmoji))
+	var prevFromMe *bool
+	for i, msg := range m.messages {
+		// Add extra spacing before a new sender group (but not before first message)
+		if i > 0 && prevFromMe != nil && *prevFromMe != msg.IsFromMe {
+			sb.WriteRune('\n')
+		}
+		renderedMsg := renderMessage(msg, m.selfJID, m.noEmoji, m.width)
+		sb.WriteString(renderedMsg)
 		sb.WriteRune('\n')
+		fromMe := msg.IsFromMe
+		prevFromMe = &fromMe
 	}
 	return sb.String()
 }
 
-func renderMessage(msg whatsapp.Message, selfJID string, noEmoji bool) string {
-	ts := tsStyle.Render(msg.Timestamp.Format("15:04"))
-	isMe := chatJID(msg.SenderJID) == chatJID(selfJID)
+func renderMessage(msg whatsapp.Message, selfJID string, noEmoji bool, width int) string {
+	tsText := msg.Timestamp.Format("15:04")
+	isMe := msg.IsFromMe
 
-	var body string
+	var bodyText string
 	switch {
 	case msg.Failed:
-		prefix := msgFailStyle.Render("[!] ")
-		body = prefix + msgBodyStyle.Render(emoji.MapString(msg.Body, noEmoji))
+		bodyText = "[!] " + emoji.MapString(msg.Body, noEmoji)
 	case msg.MediaType != "":
-		body = msgMediaStyle.Render("[" + msg.MediaType + "]")
+		bodyText = "[" + msg.MediaType + "]"
 	default:
-		body = msgBodyStyle.Render(emoji.MapString(msg.Body, noEmoji))
+		bodyText = emoji.MapString(msg.Body, noEmoji)
 	}
 
 	if isMe {
-		// Your messages: indented with bright green "You:" prefix
-		// Format:    [15:04] You: message text
-		indent := strings.Repeat(" ", userMsgIndent)
-		sender := senderYouStyle.Render("You:")
-		return indent + ts + " " + sender + " " + body
+		// Your messages: bright green "You:" prefix
+		prefix := tsText + " You: "
+		prefixLen := len(prefix)
+		// Wrap the plain body text to fit within available width
+		available := width - prefixLen
+		if available < 10 {
+			available = 10
+		}
+		wrappedBody := softWrap(bodyText, available)
+		lines := strings.Split(wrappedBody, "\n")
+		// Build styled output: first line has timestamp+sender, continuation lines are indented
+		continuation := strings.Repeat(" ", prefixLen)
+		var sb strings.Builder
+		for i, line := range lines {
+			if i == 0 {
+				sb.WriteString(tsStyle.Render(tsText) + " " + senderYouStyle.Render("You:") + " " + styleMsgBody(msg, line, noEmoji))
+			} else {
+				sb.WriteRune('\n')
+				sb.WriteString(continuation + styleMsgBody(msg, line, noEmoji))
+			}
+		}
+		return sb.String()
 	} else {
-		// Others' messages: left-aligned with lighter green sender name
-		// Format: [15:04] SenderName: message text
 		senderName := msg.SenderName
 		if senderName == "" {
-			// Fallback to JID if name not available
 			senderName = chatJID(msg.SenderJID)
 		}
-		sender := senderOtherStyle.Render(senderName + ":")
-		return ts + " " + sender + " " + body
+		prefix := tsText + " " + senderName + ": "
+		prefixLen := len(prefix)
+		available := width - prefixLen
+		if available < 10 {
+			available = 10
+		}
+		wrappedBody := softWrap(bodyText, available)
+		lines := strings.Split(wrappedBody, "\n")
+		continuation := strings.Repeat(" ", prefixLen)
+		var sb strings.Builder
+		for i, line := range lines {
+			if i == 0 {
+				sb.WriteString(tsStyle.Render(tsText) + " " + senderOtherStyle.Render(senderName+":") + " " + styleMsgBody(msg, line, noEmoji))
+			} else {
+				sb.WriteRune('\n')
+				sb.WriteString(continuation + styleMsgBody(msg, line, noEmoji))
+			}
+		}
+		return sb.String()
 	}
 }
 
-// chatViewportHeight calculates the viewport height leaving room for input + hint bar + status bar.
+// styleMsgBody applies the correct style to a message body line
+func styleMsgBody(msg whatsapp.Message, line string, noEmoji bool) string {
+	switch {
+	case msg.Failed:
+		return msgFailStyle.Render(line)
+	case msg.MediaType != "":
+		return msgMediaStyle.Render(line)
+	default:
+		return msgBodyStyle.Render(line)
+	}
+}
+
+// softWrap wraps text at word boundaries to fit within maxWidth visible characters
+func softWrap(text string, maxWidth int) string {
+	if maxWidth <= 0 || len(text) <= maxWidth {
+		return text
+	}
+
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return text
+	}
+
+	var lines []string
+	currentLine := words[0]
+
+	for _, word := range words[1:] {
+		if len(currentLine)+1+len(word) <= maxWidth {
+			currentLine += " " + word
+		} else {
+			lines = append(lines, currentLine)
+			currentLine = word
+		}
+	}
+	lines = append(lines, currentLine)
+	return strings.Join(lines, "\n")
+}
+
+// chatViewportHeight calculates the viewport height leaving room for header + input + hint bar + status bar.
 func chatViewportHeight(total int) int {
+	const headerLines = 2  // contact name + divider
+	const inputDivider = 1 // divider above input
 	const inputLines = 1
 	const hintBar = 3 // \n + divider + \n + hint + \n
 	const statusBar = 1
-	h := total - inputLines - hintBar - statusBar
+	h := total - headerLines - inputDivider - inputLines - hintBar - statusBar
 	if h < 1 {
 		return 1
 	}

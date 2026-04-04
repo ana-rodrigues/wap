@@ -58,6 +58,7 @@ type Message struct {
 	Body       string
 	Failed     bool
 	Pending    bool // True for optimistic messages awaiting server confirmation
+	IsFromMe   bool // True if message is from the user (sent via any channel)
 	// MediaType is set for non-text messages ("image", "voice message", "sticker", etc.)
 	MediaType string
 }
@@ -500,6 +501,7 @@ func (c *Client) handleEvent(raw any) {
 			ChatJID:    chatJID,
 			SenderJID:  senderJID,
 			SenderName: senderName,
+			IsFromMe:   v.Info.IsFromMe,
 			Pending:    false,
 		}
 		switch {
@@ -710,6 +712,7 @@ func messageFromHistorySync(hsMsg *waHistorySync.HistorySyncMsg, chatJID, selfJI
 		ChatJID:    chatJID,
 		SenderJID:  senderJID,
 		SenderName: senderName,
+		IsFromMe:   key.GetFromMe(),
 	}
 
 	switch {
