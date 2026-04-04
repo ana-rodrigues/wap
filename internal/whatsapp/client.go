@@ -474,6 +474,16 @@ func (c *Client) SelfJID() string {
 	return c.selfJID
 }
 
+// ContactName resolves the display name for a JID string. Used by the TUI to
+// fill in sender names that are missing from stored message history.
+func (c *Client) ContactName(jid string) string {
+	parsed, err := types.ParseJID(jid)
+	if err != nil || jid == "" {
+		return jid
+	}
+	return c.displayName(parsed)
+}
+
 // --- internal ---
 
 // scheduleContactsReady debounces EventSyncDone emission during a fresh HistorySync.
@@ -723,7 +733,7 @@ func (c *Client) populateFromHistorySync(data *waHistorySync.HistorySync) bool {
 		var msgs []Message
 		var preview string
 		for i, hsMsg := range conv.GetMessages() {
-			if i >= 25 {
+			if i >= 40 {
 				break
 			}
 			msg := messageFromHistorySync(hsMsg, jid)

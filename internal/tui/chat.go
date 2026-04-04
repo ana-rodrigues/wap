@@ -63,8 +63,17 @@ func NewChatScreen(contact whatsapp.Contact, client *whatsapp.Client, noEmoji bo
 
 	vp := viewport.New(width, chatViewportHeight(height))
 
-	// Load message history from client
+	// Load message history from client, resolving any missing sender names.
 	messages := client.GetMessageHistory(contact.JID)
+	for i := range messages {
+		if messages[i].SenderName == "" {
+			if messages[i].IsFromMe {
+				messages[i].SenderName = "You"
+			} else {
+				messages[i].SenderName = client.ContactName(messages[i].SenderJID)
+			}
+		}
+	}
 
 	m := ChatScreen{
 		contact:  contact,
@@ -213,22 +222,19 @@ func (m ChatScreen) renderMessages() string {
 	}
 
 	var sb strings.Builder
-	var prevFromMe *bool
+	sb.WriteString(msgMediaStyle.Render("— showing last " + fmt.Sprintf("%d", len(m.messages)) + " messages —"))
+	sb.WriteRune('\n')
 	for i, msg := range m.messages {
-		// Add extra spacing before a new sender group (but not before first message)
-		if i > 0 && prevFromMe != nil && *prevFromMe != msg.IsFromMe {
+		sb.WriteRune('\n')
+		sb.WriteString(renderMessage(msg, m.selfJID, m.noEmoji, m.width))
+		if i < len(m.messages)-1 {
 			sb.WriteRune('\n')
 		}
-		renderedMsg := renderMessage(msg, m.selfJID, m.noEmoji)
-		sb.WriteString(renderedMsg)
-		sb.WriteRune('\n')
-		fromMe := msg.IsFromMe
-		prevFromMe = &fromMe
 	}
 	return sb.String()
 }
 
-func renderMessage(msg whatsapp.Message, selfJID string, noEmoji bool) string {
+func renderMessage(msg whatsapp.Message, selfJID string, noEmoji bool, width int) string {
 	tsText := msg.Timestamp.Format("15:04")
 
 	var bodyText string
@@ -242,14 +248,30 @@ func renderMessage(msg whatsapp.Message, selfJID string, noEmoji bool) string {
 	}
 
 	if msg.IsFromMe {
-		return tsStyle.Render(tsText) + " " + senderYouStyle.Render("You:") + " " + styleMsgBody(msg, bodyText, noEmoji)
+		header := tsStyle.Render(tsText) + " " + senderYouStyle.Render("You:")
+		lines := strings.Split(softWrap(bodyText, width), "\n")
+		var sb strings.Builder
+		sb.WriteString(header)
+		for _, line := range lines {
+			sb.WriteRune('\n')
+			sb.WriteString(styleMsgBody(msg, line, noEmoji))
+		}
+		return sb.String()
 	}
 
 	senderName := msg.SenderName
 	if senderName == "" {
 		senderName = chatJID(msg.SenderJID)
 	}
-	return tsStyle.Render(tsText) + " " + senderOtherStyle.Render(senderName+":") + " " + styleMsgBody(msg, bodyText, noEmoji)
+	header := tsStyle.Render(tsText) + " " + senderOtherStyle.Render(senderName+":")
+	lines := strings.Split(softWrap(bodyText, width), "\n")
+	var sb strings.Builder
+	sb.WriteString(header)
+	for _, line := range lines {
+		sb.WriteRune('\n')
+		sb.WriteString(styleMsgBody(msg, line, noEmoji))
+	}
+	return sb.String()
 }
 
 // styleMsgBody applies the correct style to a message body line

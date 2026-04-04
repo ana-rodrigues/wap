@@ -338,14 +338,14 @@ func (m App) renderHint() string {
 	case screenContacts:
 		if m.contacts.compact {
 			hint = hintKeyStyle.Render("esc") + " " + hintLabelStyle.Render("go back") +
-				"  " + hintKeyStyle.Render("⌥+esc") + " " + hintLabelStyle.Render("clear session")
+				"  " + hintKeyStyle.Render("⌥+esc") + " " + hintLabelStyle.Render("logout")
 		} else {
-			hint = hintKeyStyle.Render("esc") + " " + hintLabelStyle.Render("close") +
-				"  " + hintKeyStyle.Render("⌥+esc") + " " + hintLabelStyle.Render("clear session")
+			hint = hintKeyStyle.Render("esc") + " " + hintLabelStyle.Render("quit") +
+				"  " + hintKeyStyle.Render("⌥+esc") + " " + hintLabelStyle.Render("logout")
 		}
 	case screenChat:
 		hint = hintKeyStyle.Render("esc") + " " + hintLabelStyle.Render("go back") +
-			"  " + hintKeyStyle.Render("⌥+esc") + " " + hintLabelStyle.Render("clear session")
+			"  " + hintKeyStyle.Render("⌥+esc") + " " + hintLabelStyle.Render("logout")
 	default:
 		return ""
 	}
