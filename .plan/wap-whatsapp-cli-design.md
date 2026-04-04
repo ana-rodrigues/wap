@@ -22,10 +22,10 @@
 - **Message `IsFromMe` flag** for consistent styling of user messages across all WhatsApp channels (Web, phone, etc.)
 - **Recent chats persistence** via SQLite (survives restarts)
 - **History sync** from WhatsApp server on connect
+- **Auth screen countdown** shows `0s` immediately on first render — the `TickMsg` from `AuthScreen.Init()` needs to be wired into `App.Init()` (currently only `waitForEvent` and `contacts.Init()` are batched there)
 
 ### 🔧 Known Issues / Remaining Work
 
-- **Auth screen countdown** shows `0s` immediately on first render — the `TickMsg` from `AuthScreen.Init()` needs to be wired into `App.Init()` (currently only `waitForEvent` and `contacts.Init()` are batched there)
 - **QR code size** — cannot be reduced further with `qrterminal` library; the QR code size is determined by the data encoded and error correction level (currently `L` for smallest)
 - **Recent Chats header** — the "RECENT CHATS" header + divider is rendered but the list height calculation may need fine-tuning if the header scrolls off screen
 - **Chat input wrapping** — input text wraps via `softWrap()` but the cursor position may not track correctly on wrapped lines (limitation of `bubbles/textinput` which is single-line)

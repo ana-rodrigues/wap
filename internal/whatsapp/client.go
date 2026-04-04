@@ -666,10 +666,12 @@ func (c *Client) displayName(jid types.JID) string {
 		return jid.User
 	}
 	// Check chatNames first (populated from history sync, may have richer push names).
+	// Skip entries that look like raw JIDs (contain "@") — history sync sometimes
+	// returns the JID itself as the name when no display name is available.
 	c.mu.Lock()
 	cached := c.chatNames[jid.String()]
 	c.mu.Unlock()
-	if cached != "" {
+	if cached != "" && !strings.Contains(cached, "@") {
 		return cached
 	}
 	info, err := c.wm.Store.Contacts.GetContact(context.Background(), jid)
