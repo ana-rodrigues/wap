@@ -219,7 +219,7 @@ func (m ChatScreen) renderMessages() string {
 		if i > 0 && prevFromMe != nil && *prevFromMe != msg.IsFromMe {
 			sb.WriteRune('\n')
 		}
-		renderedMsg := renderMessage(msg, m.selfJID, m.noEmoji, m.width)
+		renderedMsg := renderMessage(msg, m.selfJID, m.noEmoji)
 		sb.WriteString(renderedMsg)
 		sb.WriteRune('\n')
 		fromMe := msg.IsFromMe
@@ -228,9 +228,8 @@ func (m ChatScreen) renderMessages() string {
 	return sb.String()
 }
 
-func renderMessage(msg whatsapp.Message, selfJID string, noEmoji bool, width int) string {
+func renderMessage(msg whatsapp.Message, selfJID string, noEmoji bool) string {
 	tsText := msg.Timestamp.Format("15:04")
-	isMe := msg.IsFromMe
 
 	var bodyText string
 	switch {
@@ -242,54 +241,15 @@ func renderMessage(msg whatsapp.Message, selfJID string, noEmoji bool, width int
 		bodyText = emoji.MapString(msg.Body, noEmoji)
 	}
 
-	if isMe {
-		// Your messages: bright green "You:" prefix
-		prefix := tsText + " You: "
-		prefixLen := len(prefix)
-		// Wrap the plain body text to fit within available width
-		available := width - prefixLen
-		if available < 10 {
-			available = 10
-		}
-		wrappedBody := softWrap(bodyText, available)
-		lines := strings.Split(wrappedBody, "\n")
-		// Build styled output: first line has timestamp+sender, continuation lines are indented
-		continuation := strings.Repeat(" ", prefixLen)
-		var sb strings.Builder
-		for i, line := range lines {
-			if i == 0 {
-				sb.WriteString(tsStyle.Render(tsText) + " " + senderYouStyle.Render("You:") + " " + styleMsgBody(msg, line, noEmoji))
-			} else {
-				sb.WriteRune('\n')
-				sb.WriteString(continuation + styleMsgBody(msg, line, noEmoji))
-			}
-		}
-		return sb.String()
-	} else {
-		senderName := msg.SenderName
-		if senderName == "" {
-			senderName = chatJID(msg.SenderJID)
-		}
-		prefix := tsText + " " + senderName + ": "
-		prefixLen := len(prefix)
-		available := width - prefixLen
-		if available < 10 {
-			available = 10
-		}
-		wrappedBody := softWrap(bodyText, available)
-		lines := strings.Split(wrappedBody, "\n")
-		continuation := strings.Repeat(" ", prefixLen)
-		var sb strings.Builder
-		for i, line := range lines {
-			if i == 0 {
-				sb.WriteString(tsStyle.Render(tsText) + " " + senderOtherStyle.Render(senderName+":") + " " + styleMsgBody(msg, line, noEmoji))
-			} else {
-				sb.WriteRune('\n')
-				sb.WriteString(continuation + styleMsgBody(msg, line, noEmoji))
-			}
-		}
-		return sb.String()
+	if msg.IsFromMe {
+		return tsStyle.Render(tsText) + " " + senderYouStyle.Render("You:") + " " + styleMsgBody(msg, bodyText, noEmoji)
 	}
+
+	senderName := msg.SenderName
+	if senderName == "" {
+		senderName = chatJID(msg.SenderJID)
+	}
+	return tsStyle.Render(tsText) + " " + senderOtherStyle.Render(senderName+":") + " " + styleMsgBody(msg, bodyText, noEmoji)
 }
 
 // styleMsgBody applies the correct style to a message body line

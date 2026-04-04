@@ -30,7 +30,8 @@ const (
 	EventConnected
 	EventDisconnected
 	EventMessage
-	EventContactsReady
+	EventContactsReady // live update: refresh the list when already visible (post-sync)
+	EventSyncDone      // initial sync complete: stop the spinner and show whatever we have
 )
 
 // Event carries a single notification from the WhatsApp layer to the TUI.
@@ -80,6 +81,8 @@ type Client struct {
 	chatNames      map[string]string    // JID → display name (groups + contacts from history sync)
 	messageHistory map[string][]Message // JID → messages from history sync
 	unreadChats    map[string]bool      // JID → true if chat has unread messages
+	historySyncDone bool                // true once initial HistorySync (or fallback) has fired EventContactsReady
+	syncDebounce   *time.Timer          // fires EventContactsReady after HistorySync batches stop arriving
 }
 
 // New creates a Client. Call Connect() to establish the WhatsApp session.
@@ -119,6 +122,21 @@ func (c *Client) initRecentChatsDB() error {
 	if err != nil {
 		return fmt.Errorf("create table: %w", err)
 	}
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS wap_message_history (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		jid         TEXT NOT NULL,
+		msg_id      TEXT NOT NULL DEFAULT '',
+		timestamp   INTEGER NOT NULL DEFAULT 0,
+		sender_jid  TEXT NOT NULL DEFAULT '',
+		sender_name TEXT NOT NULL DEFAULT '',
+		body        TEXT NOT NULL DEFAULT '',
+		is_from_me  INTEGER NOT NULL DEFAULT 0,
+		media_type  TEXT NOT NULL DEFAULT ''
+	)`)
+	if err != nil {
+		return fmt.Errorf("create message history table: %w", err)
+	}
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_wap_msg_hist_jid ON wap_message_history(jid, timestamp)`)
 	return nil
 }
 
@@ -158,6 +176,72 @@ func (c *Client) loadRecentChats() {
 				c.lastPreview[jid] = preview
 			}
 		}
+	}
+}
+
+// saveMessages replaces the persisted message history for a chat in SQLite.
+// Keeps at most 50 messages (most recent).
+func (c *Client) saveMessages(jid string, messages []Message) {
+	if c.db == nil {
+		return
+	}
+	tx, err := c.db.Begin()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	_, _ = tx.Exec(`DELETE FROM wap_message_history WHERE jid = ?`, jid)
+
+	start := 0
+	if len(messages) > 50 {
+		start = len(messages) - 50
+	}
+	stmt, err := tx.Prepare(`INSERT INTO wap_message_history (jid, msg_id, timestamp, sender_jid, sender_name, body, is_from_me, media_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return
+	}
+	defer stmt.Close()
+	for _, msg := range messages[start:] {
+		isFromMe := 0
+		if msg.IsFromMe {
+			isFromMe = 1
+		}
+		_, _ = stmt.Exec(jid, msg.ID, msg.Timestamp.Unix(), msg.SenderJID, msg.SenderName, msg.Body, isFromMe, msg.MediaType)
+	}
+	_ = tx.Commit()
+}
+
+// loadMessageHistory restores messageHistory from SQLite on startup.
+func (c *Client) loadMessageHistory() {
+	if c.db == nil {
+		return
+	}
+	rows, err := c.db.Query(`SELECT jid, msg_id, timestamp, sender_jid, sender_name, body, is_from_me, media_type FROM wap_message_history ORDER BY jid, timestamp ASC`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for rows.Next() {
+		var jid, msgID, senderJID, senderName, body, mediaType string
+		var ts int64
+		var isFromMe int
+		if err := rows.Scan(&jid, &msgID, &ts, &senderJID, &senderName, &body, &isFromMe, &mediaType); err != nil {
+			continue
+		}
+		c.messageHistory[jid] = append(c.messageHistory[jid], Message{
+			ID:         msgID,
+			Timestamp:  time.Unix(ts, 0),
+			ChatJID:    jid,
+			SenderJID:  senderJID,
+			SenderName: senderName,
+			Body:       body,
+			IsFromMe:   isFromMe == 1,
+			MediaType:  mediaType,
+		})
 	}
 }
 
@@ -340,9 +424,11 @@ func (c *Client) MarkRead(jid string) {
 // accumulated messages (including sent and real-time received ones).
 func (c *Client) SyncMessages(jid string, messages []Message) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.messageHistory[jid] = make([]Message, len(messages))
 	copy(c.messageHistory[jid], messages)
+	c.mu.Unlock()
+	// Persist to SQLite so messages survive reconnects
+	c.saveMessages(jid, messages)
 }
 
 // SendText sends a plain-text message to the given JID.
@@ -390,6 +476,25 @@ func (c *Client) SelfJID() string {
 
 // --- internal ---
 
+// scheduleContactsReady debounces EventSyncDone emission during a fresh HistorySync.
+// Each call resets the timer; the event fires 2 seconds after the last batch with
+// conversations arrives, keeping the loading spinner alive until all data is ready.
+func (c *Client) scheduleContactsReady() {
+	const debounce = 2 * time.Second
+	c.mu.Lock()
+	if c.syncDebounce != nil {
+		c.syncDebounce.Stop()
+	}
+	c.syncDebounce = time.AfterFunc(debounce, func() {
+		c.mu.Lock()
+		c.historySyncDone = true
+		c.syncDebounce = nil
+		c.mu.Unlock()
+		c.emit(Event{Kind: EventSyncDone})
+	})
+	c.mu.Unlock()
+}
+
 // resolveJID converts a LID-format JID to its phone-number equivalent.
 // If the JID is already a phone number or no mapping exists, returns it unchanged.
 func (c *Client) resolveJID(jid types.JID) types.JID {
@@ -422,45 +527,76 @@ func (c *Client) handleEvent(raw any) {
 			resolved := c.resolveJID(c.wm.Store.ID.ToNonAD())
 			c.selfJID = resolved.String()
 
-			// Restore recent chats from our persisted table (survives restarts)
+			// Restore recent chats and message history from our persisted tables (survives restarts)
 			c.loadRecentChats()
+			c.loadMessageHistory()
 
 			c.emit(Event{Kind: EventConnected})
 
-			// Don't emit ContactsReady immediately — wait for HistorySync
-			// which has the full chat list. If no HistorySync arrives within
-			// 3 seconds (reconnect case), emit with whatever we have from SQLite.
-			go func() {
-				time.Sleep(3 * time.Second)
+			c.mu.Lock()
+			hasExistingData := len(c.recentActivity) > 0
+			c.mu.Unlock()
+
+			if hasExistingData {
+				// Reconnect: data already loaded from SQLite — signal sync done immediately.
+				// Mark done so Contact/GroupInfo events trigger live refreshes from here on.
 				c.mu.Lock()
-				hasData := len(c.recentActivity) > 0
+				c.historySyncDone = true
 				c.mu.Unlock()
-				if hasData {
-					c.emit(Event{Kind: EventContactsReady})
-				}
-			}()
+				c.emit(Event{Kind: EventSyncDone})
+			} else {
+				// Fresh auth: WhatsApp will push HistorySync events with conversation data.
+				// Fallback: force sync done after 10s (covers empty accounts too).
+				go func() {
+					time.Sleep(10 * time.Second)
+					c.mu.Lock()
+					alreadyDone := c.historySyncDone
+					if !alreadyDone {
+						c.historySyncDone = true
+					}
+					c.mu.Unlock()
+					if !alreadyDone {
+						c.emit(Event{Kind: EventSyncDone})
+					}
+				}()
+			}
 		}
 
 	case *events.Disconnected:
 		c.emit(Event{Kind: EventDisconnected})
 
 	case *events.HistorySync:
-		// After fresh QR pairing the phone pushes conversation history here.
-		// Populate recentActivity so RecentChats() returns useful data.
-		c.populateFromHistorySync(v.Data)
-		c.emit(Event{Kind: EventContactsReady})
+		// WhatsApp sends HistorySync in multiple batches of different types
+		// (PUSH_NAME, INITIAL_BOOTSTRAP, NON_BLOCKING_DATA, etc.) and INITIAL_BOOTSTRAP
+		// itself may arrive in several consecutive batches. We debounce: each batch
+		// that contains actual conversations resets a short timer. EventContactsReady
+		// fires only after the batches stop arriving, so the loading spinner persists
+		// until all conversations are ready.
+		if added := c.populateFromHistorySync(v.Data); added {
+			c.scheduleContactsReady()
+		}
 
 	case *events.Contact:
-		// Individual contact added/updated — refresh the list.
-		c.emit(Event{Kind: EventContactsReady})
+		// Individual contact added/updated. Only refresh the UI after the initial
+		// sync is done — WhatsApp fires these during auth before conversations arrive,
+		// and emitting early dismisses the spinner on an empty list.
+		c.mu.Lock()
+		done := c.historySyncDone
+		c.mu.Unlock()
+		if done {
+			c.emit(Event{Kind: EventContactsReady})
+		}
 
 	case *events.GroupInfo:
 		// Group name (subject) changed — update cache.
 		if v.Name != nil {
 			c.mu.Lock()
 			c.chatNames[v.JID.String()] = v.Name.Name
+			done := c.historySyncDone
 			c.mu.Unlock()
-			c.emit(Event{Kind: EventContactsReady})
+			if done {
+				c.emit(Event{Kind: EventContactsReady})
+			}
 		}
 
 	case *events.Message:
@@ -532,18 +668,29 @@ func (c *Client) handleEvent(raw any) {
 	}
 }
 
-func (c *Client) populateFromHistorySync(data *waHistorySync.HistorySync) {
+// populateFromHistorySync processes a HistorySync payload. Returns true if any
+// conversations were added, so the caller knows whether to emit EventContactsReady.
+func (c *Client) populateFromHistorySync(data *waHistorySync.HistorySync) bool {
 	if data == nil {
-		return
+		return false
 	}
+
+	type chatEntry struct {
+		jid      string
+		t        time.Time
+		name     string
+		preview  string
+		messages []Message // oldest-first, ready to display
+	}
+
+	var entries []chatEntry
+
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	for _, conv := range data.GetConversations() {
 		rawJID := conv.GetID()
 		if rawJID == "" {
 			continue
 		}
-		// Normalize JID to match the format used by EventMessage
 		parsed, err := types.ParseJID(rawJID)
 		if err != nil {
 			continue
@@ -551,7 +698,6 @@ func (c *Client) populateFromHistorySync(data *waHistorySync.HistorySync) {
 		resolved := c.resolveJID(parsed.ToNonAD())
 		jid := resolved.String()
 
-		// Skip self-JID entries (status updates, self-chat)
 		if jid == c.selfJID {
 			continue
 		}
@@ -567,50 +713,62 @@ func (c *Client) populateFromHistorySync(data *waHistorySync.HistorySync) {
 		if existing, ok := c.recentActivity[jid]; !ok || t.After(existing) {
 			c.recentActivity[jid] = t
 		}
-		// Cache the conversation name (group subject or contact push name).
+
 		name := conv.GetName()
 		if name != "" {
 			c.chatNames[jid] = name
 		}
 
-		// Persist to SQLite (preview will be filled below if available)
-		c.saveRecentChat(jid, t, name, "")
-
-		// Store message history (up to 25 messages per chat)
-		var messages []Message
+		// Collect up to 25 messages (WhatsApp sends newest-first).
+		var msgs []Message
+		var preview string
 		for i, hsMsg := range conv.GetMessages() {
 			if i >= 25 {
-				break // Limit to 25 messages
+				break
 			}
-			msg := messageFromHistorySync(hsMsg, jid, c.selfJID)
+			msg := messageFromHistorySync(hsMsg, jid)
 			if msg.Body != "" || msg.MediaType != "" {
-				messages = append(messages, msg)
+				msgs = append(msgs, msg)
 			}
-
-			// Also extract preview from first message
+			// First entry is the most recent message — use as preview.
 			if i == 0 {
 				if _, hasPreview := c.lastPreview[jid]; !hasPreview {
 					if info := hsMsg.GetMessage(); info != nil {
-						preview := extractPreview(info.GetMessage())
+						preview = extractPreview(info.GetMessage())
 						if preview != "" {
 							if info.GetKey().GetFromMe() {
 								preview = "You: " + preview
 							}
 							c.lastPreview[jid] = preview
-							c.saveRecentChat(jid, t, "", preview)
 						}
 					}
 				}
 			}
 		}
 
-		// Store messages in reverse order (oldest first for display)
-		if len(messages) > 0 {
-			for i := len(messages) - 1; i >= 0; i-- {
-				c.messageHistory[jid] = append(c.messageHistory[jid], messages[i])
-			}
+		// Reverse to oldest-first for display. Replace any existing history for
+		// this JID (avoids duplicates when multiple HistorySync batches arrive).
+		reversed := make([]Message, len(msgs))
+		for i, m := range msgs {
+			reversed[len(msgs)-1-i] = m
+		}
+		if len(reversed) > 0 {
+			c.messageHistory[jid] = reversed
+		}
+
+		entries = append(entries, chatEntry{jid, t, name, preview, reversed})
+	}
+	c.mu.Unlock()
+
+	// Persist to SQLite outside the lock so we don't block whatsmeow's event loop.
+	for _, e := range entries {
+		c.saveRecentChat(e.jid, e.t, e.name, e.preview)
+		if len(e.messages) > 0 {
+			c.saveMessages(e.jid, e.messages)
 		}
 	}
+
+	return len(entries) > 0
 }
 
 // extractPreview pulls a short text snippet from a WhatsApp message.
@@ -686,7 +844,7 @@ func (c *Client) displayName(jid types.JID) string {
 	return jid.User
 }
 
-func messageFromHistorySync(hsMsg *waHistorySync.HistorySyncMsg, chatJID, selfJID string) Message {
+func messageFromHistorySync(hsMsg *waHistorySync.HistorySyncMsg, chatJID string) Message {
 	info := hsMsg.GetMessage()
 	if info == nil {
 		return Message{}

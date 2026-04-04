@@ -234,12 +234,16 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.contacts.Init())
 			}
 
-		case whatsapp.EventContactsReady:
+		case whatsapp.EventSyncDone:
+			// Initial sync complete — stop the spinner and show whatever we have.
 			if m.active == screenContacts && !m.contacts.compact {
-				m.contacts = m.contacts.Populate(
-					m.client.RecentChats(5),
-					nil,
-				)
+				m.contacts = m.contacts.Populate(m.client.RecentChats(5), nil)
+			}
+
+		case whatsapp.EventContactsReady:
+			// Live update (post-sync): refresh the list only if already visible.
+			if m.active == screenContacts && !m.contacts.compact && !m.contacts.syncing {
+				m.contacts = m.contacts.Populate(m.client.RecentChats(5), nil)
 			}
 
 		case whatsapp.EventDisconnected:
