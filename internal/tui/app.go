@@ -75,7 +75,7 @@ func New(client *whatsapp.Client, startScreen Screen, noEmoji bool) App {
 }
 
 func (m App) Init() tea.Cmd {
-	return tea.Batch(waitForEvent(m.client), m.contacts.Init())
+	return tea.Batch(waitForEvent(m.client), m.contacts.Init(), m.auth.Init())
 }
 
 // SendResultMsg carries the result of an async SendText operation.
@@ -267,6 +267,12 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tickFrame = (m.tickFrame + 1) % len(reconnectPalette)
 			cmds = append(cmds, animTick())
 		}
+
+	// ── Auth countdown tick ───────────────────────────────────────────────────
+	case TickMsg:
+		var cmd tea.Cmd
+		m.auth, cmd = m.auth.Update(msg)
+		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)

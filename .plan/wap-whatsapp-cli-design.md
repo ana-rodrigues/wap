@@ -22,7 +22,7 @@
 - **Message `IsFromMe` flag** for consistent styling of user messages across all WhatsApp channels (Web, phone, etc.)
 - **Recent chats persistence** via SQLite (survives restarts)
 - **History sync** from WhatsApp server on connect
-- **Auth screen countdown** shows `0s` immediately on first render — the `TickMsg` from `AuthScreen.Init()` needs to be wired into `App.Init()` (currently only `waitForEvent` and `contacts.Init()` are batched there)
+- **Auth screen countdown** — fixed: `TickMsg` now properly wired into `App.Init()` and handled in `App.Update()`
 
 ### 🔧 Known Issues / Remaining Work
 
