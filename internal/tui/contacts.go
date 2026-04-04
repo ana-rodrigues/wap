@@ -151,6 +151,11 @@ type ContactsScreen struct {
 	width    int
 	height   int
 	allItems []list.Item // original unfiltered items for searching
+
+	// Compact view specific fields (when compact=true)
+	compactContacts []whatsapp.Contact // all contacts for All Contacts view
+	cursor          int                // selected index in compact view
+	filtered        []whatsapp.Contact // filtered contacts when searching
 }
 
 func NewContactsScreen(width, height int) ContactsScreen {
@@ -170,7 +175,7 @@ func newContactsScreen(width, height int, compact bool) ContactsScreen {
 	// Total: 10 lines to subtract
 	h := height - 10
 	if compact {
-		h -= 2 // search input + divider in compact view
+		h -= 5 // external header (3) + search input + divider
 	}
 	if h < 1 {
 		h = 1
@@ -196,7 +201,7 @@ func newContactsScreen(width, height int, compact bool) ContactsScreen {
 	// Don't focus search by default - let list be interactive with arrow keys
 	// User can still type to search (textinput captures typing automatically)
 
-	return ContactsScreen{list: l, spinner: s, search: search, syncing: true, compact: compact, width: width, height: height, allItems: []list.Item{}}
+	return ContactsScreen{list: l, spinner: s, search: search, syncing: true, compact: compact, width: width, height: height, allItems: []list.Item{}, cursor: 0}
 }
 
 func (m ContactsScreen) Populate(recents, all []whatsapp.Contact) ContactsScreen {
@@ -206,8 +211,9 @@ func (m ContactsScreen) Populate(recents, all []whatsapp.Contact) ContactsScreen
 	items := buildItems(recents, all)
 	m.allItems = items
 	m.list.SetItems(items)
-	// Pre-select the first contact item (skip section headers)
-	if len(items) > 0 {
+	// Pre-select the first contact item only for Recent Chats
+	// For All Contacts, start at top so first items are visible
+	if recents != nil && len(items) > 0 {
 		for i, item := range items {
 			if _, ok := item.(contactItem); ok {
 				m.list.Select(i)
@@ -215,6 +221,10 @@ func (m ContactsScreen) Populate(recents, all []whatsapp.Contact) ContactsScreen
 			}
 		}
 	}
+	// Store contacts for compact view
+	m.compactContacts = all
+	m.filtered = all
+	m.cursor = 0
 	m.syncing = false
 	return m
 }
@@ -238,6 +248,27 @@ func (m ContactsScreen) filterItems(query string) []list.Item {
 	return filtered
 }
 
+// filterCompact filters contacts for compact view based on search query
+func (m ContactsScreen) filterCompact() {
+	query := strings.ToLower(m.search.Value())
+	if query == "" {
+		m.filtered = m.compactContacts
+		m.cursor = 0
+		return
+	}
+
+	var filtered []whatsapp.Contact
+	for _, c := range m.compactContacts {
+		if strings.Contains(strings.ToLower(c.DisplayName), query) {
+			filtered = append(filtered, c)
+		}
+	}
+	m.filtered = filtered
+	if m.cursor >= len(filtered) {
+		m.cursor = 0
+	}
+}
+
 func (m ContactsScreen) Init() tea.Cmd {
 	if m.syncing {
 		return m.spinner.Tick
@@ -256,13 +287,82 @@ func (m ContactsScreen) Update(msg tea.Msg) (ContactsScreen, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// In compact view, handle search input
-		if m.compact && !m.syncing && m.search.Focused() {
-			var cmd tea.Cmd
-			m.search, cmd = m.search.Update(msg)
-			// Filter list based on search query
-			m.list.SetItems(m.filterItems(m.search.Value()))
-			return m, cmd
+		// In compact view, handle search input first
+		if m.compact && !m.syncing {
+			// Handle escape to go back
+			if msg.Type == tea.KeyEsc {
+				// Let ESC bubble up to app.go to handle navigation back
+				break
+			}
+
+			// Handle Enter to select contact
+			if msg.Type == tea.KeyEnter {
+				contacts := m.filtered
+				if len(contacts) > 0 && m.cursor >= 0 && m.cursor < len(contacts) {
+					return m, func() tea.Msg { return ContactSelectedMsg{Contact: contacts[m.cursor]} }
+				}
+				return m, nil
+			}
+
+			// Handle arrow keys for navigation
+			switch msg.Type {
+			case tea.KeyUp:
+				if m.cursor > 0 {
+					m.cursor--
+				}
+				return m, nil
+			case tea.KeyDown:
+				contacts := m.filtered
+				if m.cursor < len(contacts)-1 {
+					m.cursor++
+				}
+				return m, nil
+			case tea.KeyHome:
+				m.cursor = 0
+				return m, nil
+			case tea.KeyEnd:
+				m.cursor = len(m.filtered) - 1
+				if m.cursor < 0 {
+					m.cursor = 0
+				}
+				return m, nil
+			case tea.KeyPgUp:
+				m.cursor -= 10
+				if m.cursor < 0 {
+					m.cursor = 0
+				}
+				return m, nil
+			case tea.KeyPgDown:
+				contacts := m.filtered
+				m.cursor += 10
+				if m.cursor >= len(contacts) {
+					m.cursor = len(contacts) - 1
+					if m.cursor < 0 {
+						m.cursor = 0
+					}
+				}
+				return m, nil
+			}
+
+			// For typing keys, handle search
+			if m.search.Focused() {
+				var cmd tea.Cmd
+				m.search, cmd = m.search.Update(msg)
+				m.filterCompact()
+				return m, cmd
+			}
+
+			// Focus search and handle typing
+			if msg.String() != "" {
+				m.search.Focus()
+				var cmd tea.Cmd
+				m.search, cmd = m.search.Update(msg)
+				m.filterCompact()
+				return m, cmd
+			}
+
+			// Let any other keys pass through
+			break
 		}
 
 		// Don't handle contact selection while loading, but let keys bubble up
@@ -283,7 +383,7 @@ func (m ContactsScreen) Update(msg tea.Msg) (ContactsScreen, tea.Cmd) {
 		// Header (2) + newlines (2) + footer (5) + buffer (1) = 10
 		h := msg.Height - 10
 		if m.compact {
-			h -= 2 // search input + divider
+			h -= 5 // external header (3) + search input + divider
 		}
 		if h < 1 {
 			h = 1
@@ -310,7 +410,10 @@ func (m ContactsScreen) View() string {
 		// Show search input with divider above it
 		searchDivider := headerDivider.Render(strings.Repeat("─", m.width))
 		searchInput := strings.TrimSuffix(m.search.View(), "\n")
-		return "\n" + divider + "\n" + m.list.View() + "\n" + searchDivider + "\n" + searchInput
+		header := chatHeaderStyle.Render("  ALL CONTACTS")
+		// Render contacts directly
+		contactsView := m.renderCompactContacts()
+		return "\n" + header + "\n" + divider + "\n" + contactsView + "\n" + searchDivider + "\n" + searchInput
 	}
 	// Non-compact view (Recent Chats)
 	if m.syncing {
@@ -321,19 +424,56 @@ func (m ContactsScreen) View() string {
 	return m.list.View()
 }
 
-// --- helpers ---
+// renderCompactContacts renders the contact list for compact view
+func (m ContactsScreen) renderCompactContacts() string {
+	contacts := m.filtered
+	if len(contacts) == 0 {
+		return "  " + previewStyle.Render("No contacts found")
+	}
+
+	// Calculate visible range based on cursor
+	// Keep cursor visible in the middle when possible
+	visibleHeight := m.height - 10 // Account for header, search, footer
+	if visibleHeight < 5 {
+		visibleHeight = 5
+	}
+
+	startIdx := 0
+	if m.cursor > visibleHeight/2 {
+		startIdx = m.cursor - visibleHeight/2
+	}
+	endIdx := startIdx + visibleHeight
+	if endIdx > len(contacts) {
+		endIdx = len(contacts)
+		startIdx = endIdx - visibleHeight
+		if startIdx < 0 {
+			startIdx = 0
+		}
+	}
+
+	var sb strings.Builder
+	for i := startIdx; i < endIdx && i < len(contacts); i++ {
+		c := contacts[i]
+		if i == m.cursor {
+			sb.WriteString(selectedStyle.Render("› " + c.DisplayName))
+		} else {
+			sb.WriteString("  " + contactNameStyle.Render(c.DisplayName))
+		}
+		sb.WriteRune('\n')
+	}
+
+	return sb.String()
+}
 
 func buildItems(recents, all []whatsapp.Contact) []list.Item {
 	showHeaders := len(recents) > 0 && len(all) > 0
 	items := make([]list.Item, 0, len(recents)+len(all)+4)
 
-	// Always add main header as first item
-	// If recents is nil, this is the All Contacts (compact) view
-	title := "RECENT CHATS"
-	if recents == nil {
-		title = "ALL CONTACTS"
+	// Always add main header as first item for Recent Chats only
+	// All Contacts has header rendered in View() instead
+	if recents != nil {
+		items = append(items, mainHeader{"RECENT CHATS"})
 	}
-	items = append(items, mainHeader{title})
 
 	if len(recents) > 0 {
 		for _, c := range recents {
