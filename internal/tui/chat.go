@@ -23,7 +23,6 @@ var (
 	msgFailStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5252"))
 
 	inputPromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676"))
-	chatHeaderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Bold(true)
 	headerDivider    = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
 )
 
@@ -210,7 +209,7 @@ func (m ChatScreen) View() string {
 // renderMessages builds the full viewport content string from m.messages.
 func (m ChatScreen) renderMessages() string {
 	if len(m.messages) == 0 {
-		return msgMediaStyle.Render("  No messages yet.")
+		return "\n" + msgMediaStyle.Render("  No messages yet.")
 	}
 
 	var sb strings.Builder

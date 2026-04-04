@@ -21,15 +21,16 @@ type ContactSelectedMsg struct {
 }
 
 var (
-	headingStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Bold(true)
+	headingStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
 	dividerStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#004D20"))
-	sectionStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#004D20")).Bold(true)
+	sectionStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#004D20"))
 	contactNameStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
 	previewStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
 	selectedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676"))
-	showAllStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
-	unreadNameStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676")).Bold(true)
-	unreadPreviewStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#aaaaaa")).Bold(true)
+	showAllStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
+	unreadNameStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#00E676"))
+	unreadPreviewStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#aaaaaa"))
+	chatHeaderStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
 )
 
 // --- list item types ---
@@ -249,12 +250,12 @@ func (m ContactsScreen) filterItems(query string) []list.Item {
 }
 
 // filterCompact filters contacts for compact view based on search query
-func (m ContactsScreen) filterCompact() {
+func (m ContactsScreen) filterCompact() ContactsScreen {
 	query := strings.ToLower(m.search.Value())
 	if query == "" {
 		m.filtered = m.compactContacts
 		m.cursor = 0
-		return
+		return m
 	}
 
 	var filtered []whatsapp.Contact
@@ -267,6 +268,7 @@ func (m ContactsScreen) filterCompact() {
 	if m.cursor >= len(filtered) {
 		m.cursor = 0
 	}
+	return m
 }
 
 func (m ContactsScreen) Init() tea.Cmd {
@@ -348,7 +350,7 @@ func (m ContactsScreen) Update(msg tea.Msg) (ContactsScreen, tea.Cmd) {
 			if m.search.Focused() {
 				var cmd tea.Cmd
 				m.search, cmd = m.search.Update(msg)
-				m.filterCompact()
+				m = m.filterCompact()
 				return m, cmd
 			}
 
@@ -357,7 +359,7 @@ func (m ContactsScreen) Update(msg tea.Msg) (ContactsScreen, tea.Cmd) {
 				m.search.Focus()
 				var cmd tea.Cmd
 				m.search, cmd = m.search.Update(msg)
-				m.filterCompact()
+				m = m.filterCompact()
 				return m, cmd
 			}
 
