@@ -144,6 +144,7 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			// Esc on all-contacts → back to recents
 			case m.active == screenContacts && m.contacts.compact:
+				// Switch back to recent chats view by creating a new non-compact screen
 				m.contacts = NewContactsScreen(m.width, m.height)
 				cmds = append(cmds, m.contacts.Init())
 				m.contacts = m.contacts.Populate(m.client.RecentChats(5), nil)
@@ -153,10 +154,9 @@ func (m App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Sync accumulated messages back to client before leaving
 				m.client.SyncMessages(m.chat.contact.JID, m.chat.Messages())
 				m.active = screenContacts
-				m.contacts = NewContactsScreen(m.width, m.height)
-				cmds = append(cmds, m.contacts.Init())
+				// Reuse existing ContactsScreen and refresh data, preserving UI state
 				m.contacts = m.contacts.Populate(m.client.RecentChats(5), nil)
-				return m, tea.Batch(cmds...)
+				return m, nil
 			}
 		}
 

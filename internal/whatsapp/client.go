@@ -487,10 +487,10 @@ func (c *Client) ContactName(jid string) string {
 // --- internal ---
 
 // scheduleContactsReady debounces EventSyncDone emission during a fresh HistorySync.
-// Each call resets the timer; the event fires 2 seconds after the last batch with
+// Each call resets the timer; the event fires 3 seconds after the last batch with
 // conversations arrives, keeping the loading spinner alive until all data is ready.
 func (c *Client) scheduleContactsReady() {
-	const debounce = 2 * time.Second
+	const debounce = 3 * time.Second
 	c.mu.Lock()
 	if c.syncDebounce != nil {
 		c.syncDebounce.Stop()
