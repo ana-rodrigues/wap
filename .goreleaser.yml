@@ -1,0 +1,33 @@
+version: 2
+
+builds:
+  - binary: wap-cli
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ['^docs:', '^test:', 'Merge pull request']
+
+brews:
+  - name: wap-cli
+    repository:
+      owner: ana-rodrigues
+      name: wap
+    directory: Formula
+    homepage: "https://github.com/ana-rodrigues/wap"
+    description: "Minimal WhatsApp CLI for the terminal"
+    install: |
+      bin.install "wap-cli" 
