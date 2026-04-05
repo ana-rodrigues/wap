@@ -108,7 +108,7 @@ func New() (*Client, error) {
 
 // initRecentChatsDB opens our own tables in session.db for persisting recent chat data.
 func (c *Client) initRecentChatsDB() error {
-	db, err := sql.Open("sqlite3", c.dbPath)
+	db, err := sql.Open("sqlite", "file:"+c.dbPath+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}
@@ -266,7 +266,7 @@ func (c *Client) HasSession() bool {
 		return false
 	}
 	ctx := context.Background()
-	container, err := sqlstore.New(ctx, "sqlite3", "file:"+c.dbPath+"?_foreign_keys=on", waLog.Noop)
+	container, err := sqlstore.New(ctx, "sqlite", "file:"+c.dbPath+"?_pragma=foreign_keys(1)", waLog.Noop)
 	if err != nil {
 		return false
 	}
@@ -285,7 +285,7 @@ func (c *Client) Connect() error {
 	}
 
 	ctx := context.Background()
-	container, err := sqlstore.New(ctx, "sqlite3", "file:"+c.dbPath+"?_foreign_keys=on", waLog.Noop)
+	container, err := sqlstore.New(ctx, "sqlite", "file:"+c.dbPath+"?_pragma=foreign_keys(1)", waLog.Noop)
 	// Restrict file to owner-only after sqlstore creates it.
 	_ = os.Chmod(c.dbPath, 0600)
 	if err != nil {
@@ -578,13 +578,11 @@ func (c *Client) handleEvent(raw any) {
 	case *events.HistorySync:
 		// WhatsApp sends HistorySync in multiple batches of different types
 		// (PUSH_NAME, INITIAL_BOOTSTRAP, NON_BLOCKING_DATA, etc.) and INITIAL_BOOTSTRAP
-		// itself may arrive in several consecutive batches. We debounce: each batch
-		// that contains actual conversations resets a short timer. EventContactsReady
-		// fires only after the batches stop arriving, so the loading spinner persists
-		// until all conversations are ready.
-		if added := c.populateFromHistorySync(v.Data); added {
-			c.scheduleContactsReady()
-		}
+		// itself may arrive in several consecutive batches. We debounce on every batch
+		// (not just ones with conversations) so trailing metadata batches don't cause
+		// the spinner to stop before all data has arrived.
+		c.populateFromHistorySync(v.Data)
+		c.scheduleContactsReady()
 
 	case *events.Contact:
 		// Individual contact added/updated. Only refresh the UI after the initial
@@ -678,11 +676,10 @@ func (c *Client) handleEvent(raw any) {
 	}
 }
 
-// populateFromHistorySync processes a HistorySync payload. Returns true if any
-// conversations were added, so the caller knows whether to emit EventContactsReady.
-func (c *Client) populateFromHistorySync(data *waHistorySync.HistorySync) bool {
+// populateFromHistorySync processes a HistorySync payload.
+func (c *Client) populateFromHistorySync(data *waHistorySync.HistorySync) {
 	if data == nil {
-		return false
+		return
 	}
 
 	type chatEntry struct {
@@ -778,8 +775,8 @@ func (c *Client) populateFromHistorySync(data *waHistorySync.HistorySync) bool {
 		}
 	}
 
-	return len(entries) > 0
 }
+
 
 // extractPreview pulls a short text snippet from a WhatsApp message.
 func extractPreview(msg *waE2E.Message) string {
