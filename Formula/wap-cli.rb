@@ -5,20 +5,20 @@
 class WapCli < Formula
   desc "Minimal WhatsApp CLI for the terminal"
   homepage "https://github.com/ana-rodrigues/wap"
-  version "0.1.1"
+  version "0.1.2"
 
   on_macos do
     if Hardware::CPU.intel?
-      url "https://github.com/ana-rodrigues/wap/releases/download/v0.1.1/wap_0.1.1_darwin_amd64.tar.gz"
-      sha256 "6a622585a9e0013428e4007b1cea1b84691e553492160f53773752ede9757dbe"
+      url "https://github.com/ana-rodrigues/wap/releases/download/v0.1.2/wap_0.1.2_darwin_amd64.tar.gz"
+      sha256 "295d472b3f667ba9ef5958db85533e97e1f3f20c02f42cac48d2bf5efcc9c5b6"
 
       define_method(:install) do
         bin.install "wap-cli"
       end
     end
     if Hardware::CPU.arm?
-      url "https://github.com/ana-rodrigues/wap/releases/download/v0.1.1/wap_0.1.1_darwin_arm64.tar.gz"
-      sha256 "a8be2cc37259230f07714f39e08b7ec959e5e4ccc1086efb5e6beba0e1101ebc"
+      url "https://github.com/ana-rodrigues/wap/releases/download/v0.1.2/wap_0.1.2_darwin_arm64.tar.gz"
+      sha256 "ff74a9b4e30c3c358d2f6cda6e9e3d8c11a0824f5067f28df50fbc74316b8c00"
 
       define_method(:install) do
         bin.install "wap-cli"
@@ -28,15 +28,15 @@ class WapCli < Formula
 
   on_linux do
     if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
-      url "https://github.com/ana-rodrigues/wap/releases/download/v0.1.1/wap_0.1.1_linux_amd64.tar.gz"
-      sha256 "685f171853921f212f4634b970c5554ac41f075b02038ff94d01664a040962d7"
+      url "https://github.com/ana-rodrigues/wap/releases/download/v0.1.2/wap_0.1.2_linux_amd64.tar.gz"
+      sha256 "2d46604f1d17c593b1f8cbc10ba44de13cc17c688c6785e1b4805fb6aa8507b7"
       define_method(:install) do
         bin.install "wap-cli"
       end
     end
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/ana-rodrigues/wap/releases/download/v0.1.1/wap_0.1.1_linux_arm64.tar.gz"
-      sha256 "d06ccd2a7cad859ee328eae1d73d813cb86c687d6535ecc70cb8c329cffb9f4b"
+      url "https://github.com/ana-rodrigues/wap/releases/download/v0.1.2/wap_0.1.2_linux_arm64.tar.gz"
+      sha256 "1df514e5b41c92a6fa583d261fcbab7b36503b0dd943ac6cf45b35534aab75ca"
       define_method(:install) do
         bin.install "wap-cli"
       end
