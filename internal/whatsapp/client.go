@@ -331,26 +331,36 @@ func (c *Client) Connect() error {
 // RecentChats returns the most recently active chats from in-memory tracking,
 // ordered by last message time. Limit <= 0 means no limit.
 func (c *Client) RecentChats(limit int) []Contact {
+	// Snapshot all fields under a single lock to avoid data races.
 	c.mu.Lock()
 	type entry struct {
 		jid      string
 		lastSeen time.Time
+		preview  string
+		unread   bool
 	}
 	entries := make([]entry, 0, len(c.recentActivity))
 	for jid, t := range c.recentActivity {
-		entries = append(entries, entry{jid, t})
+		entries = append(entries, entry{
+			jid:      jid,
+			lastSeen: t,
+			preview:  c.lastPreview[jid],
+			unread:   c.unreadChats[jid],
+		})
 	}
 	c.mu.Unlock()
 
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].lastSeen.After(entries[j].lastSeen)
 	})
-	if limit > 0 && len(entries) > limit {
-		entries = entries[:limit]
-	}
 
-	contacts := make([]Contact, 0, len(entries))
+	// Apply limit AFTER filtering unparseable JIDs so we always return up to
+	// `limit` valid contacts even if some entries have malformed JIDs.
+	contacts := make([]Contact, 0, limit)
 	for _, e := range entries {
+		if limit > 0 && len(contacts) >= limit {
+			break
+		}
 		jid, err := types.ParseJID(e.jid)
 		if err != nil {
 			continue
@@ -358,9 +368,9 @@ func (c *Client) RecentChats(limit int) []Contact {
 		contacts = append(contacts, Contact{
 			JID:         e.jid,
 			DisplayName: c.displayName(jid),
-			LastMessage: c.lastPreview[e.jid],
+			LastMessage: e.preview,
 			LastSeen:    e.lastSeen,
-			Unread:      c.unreadChats[e.jid],
+			Unread:      e.unread,
 		})
 	}
 	return contacts
@@ -486,6 +496,66 @@ func (c *Client) ContactName(jid string) string {
 
 // --- internal ---
 
+// resolveRecentNames queries the whatsmeow contact store for the 5 most recent
+// chats and caches any resolved display names into chatNames. It is called just
+// before emitting EventSyncDone so the TUI always shows real names rather than
+// raw phone-number JIDs. The function is a no-op for groups (their names come
+// from HistorySync conv.GetName) and for contacts that already have a cached name.
+func (c *Client) resolveRecentNames() {
+	if c.wm == nil {
+		return
+	}
+
+	// Snapshot the top-5 most-recent JIDs without holding the lock during I/O.
+	c.mu.Lock()
+	type entry struct {
+		jid string
+		t   time.Time
+	}
+	entries := make([]entry, 0, len(c.recentActivity))
+	for jid, t := range c.recentActivity {
+		entries = append(entries, entry{jid, t})
+	}
+	c.mu.Unlock()
+
+	sort.Slice(entries, func(i, j int) bool { return entries[i].t.After(entries[j].t) })
+	if len(entries) > 5 {
+		entries = entries[:5]
+	}
+
+	for _, e := range entries {
+		c.mu.Lock()
+		cached := c.chatNames[e.jid]
+		c.mu.Unlock()
+		// Already have a real name (not a raw JID).
+		if cached != "" && !strings.Contains(cached, "@") {
+			continue
+		}
+
+		parsed, err := types.ParseJID(e.jid)
+		if err != nil || parsed.Server == types.GroupServer {
+			continue // groups: name comes from HistorySync, nothing to do here
+		}
+
+		info, err := c.wm.Store.Contacts.GetContact(context.Background(), parsed)
+		if err != nil {
+			continue
+		}
+		name := info.FullName
+		if name == "" {
+			name = info.PushName
+		}
+		if name == "" {
+			continue
+		}
+		c.mu.Lock()
+		c.chatNames[e.jid] = name
+		c.mu.Unlock()
+		// Persist so it survives restarts without needing another store lookup.
+		c.saveRecentChat(e.jid, time.Time{}, name, "")
+	}
+}
+
 // scheduleContactsReady debounces EventSyncDone emission during a fresh HistorySync.
 // Each call resets the timer; the event fires 3 seconds after the last batch with
 // conversations arrives, keeping the loading spinner alive until all data is ready.
@@ -496,6 +566,9 @@ func (c *Client) scheduleContactsReady() {
 		c.syncDebounce.Stop()
 	}
 	c.syncDebounce = time.AfterFunc(debounce, func() {
+		// Resolve display names for the top-5 recent chats before the TUI
+		// reads them — this ensures real names are shown, not phone numbers.
+		c.resolveRecentNames()
 		c.mu.Lock()
 		c.historySyncDone = true
 		c.syncDebounce = nil
@@ -547,29 +620,33 @@ func (c *Client) handleEvent(raw any) {
 			hasExistingData := len(c.recentActivity) > 0
 			c.mu.Unlock()
 
+			// Always wait for WhatsApp to push HistorySync batches before signalling
+			// ready — scheduleContactsReady fires EventSyncDone once all batches have
+			// settled. Emitting immediately from SQLite cache caused two bugs:
+			//   1. The spinner stopped before WhatsApp delivered fresh data, leaving an
+			//      empty or stale list for several seconds.
+			//   2. Unread messages arrived one-by-one via EventMessage after the spinner
+			//      stopped, instead of all appearing at once.
+			// The fallback fires only if no HistorySync arrives within the window.
+			fallback := 10 * time.Second
 			if hasExistingData {
-				// Reconnect: data already loaded from SQLite — signal sync done immediately.
-				// Mark done so Contact/GroupInfo events trigger live refreshes from here on.
-				c.mu.Lock()
-				c.historySyncDone = true
-				c.mu.Unlock()
-				c.emit(Event{Kind: EventSyncDone})
-			} else {
-				// Fresh auth: WhatsApp will push HistorySync events with conversation data.
-				// Fallback: force sync done after 10s (covers empty accounts too).
-				go func() {
-					time.Sleep(10 * time.Second)
-					c.mu.Lock()
-					alreadyDone := c.historySyncDone
-					if !alreadyDone {
-						c.historySyncDone = true
-					}
-					c.mu.Unlock()
-					if !alreadyDone {
-						c.emit(Event{Kind: EventSyncDone})
-					}
-				}()
+				// Reconnect: SQLite cache is available as a safety net, so a shorter
+				// fallback is sufficient.
+				fallback = 5 * time.Second
 			}
+			go func() {
+				time.Sleep(fallback)
+				c.mu.Lock()
+				alreadyDone := c.historySyncDone
+				if !alreadyDone {
+					c.historySyncDone = true
+				}
+				c.mu.Unlock()
+				if !alreadyDone {
+					c.resolveRecentNames()
+					c.emit(Event{Kind: EventSyncDone})
+				}
+			}()
 		}
 
 	case *events.Disconnected:

@@ -71,7 +71,11 @@ func (m AuthScreen) View() string {
 		return sb.String()
 	}
 
-	// QR code — half-block mode keeps it compact, smaller size
+	// QR code rendered OUTSIDE any lipgloss border. qrterminal emits ANSI escape
+	// sequences for half-block colouring; if that output is passed into
+	// lipgloss.Render() the border renderer mis-measures visible width (it cannot
+	// reliably strip all compound colour sequences) and draws the right-hand │
+	// at the wrong column, producing the "weird lines" seen in real terminals.
 	var buf bytes.Buffer
 	qrterminal.GenerateWithConfig(m.qrCode, qrterminal.Config{
 		Level:      qrterminal.L,
@@ -79,26 +83,13 @@ func (m AuthScreen) View() string {
 		HalfBlocks: true,
 		BlackChar:  qrterminal.BLACK_BLACK,
 		WhiteChar:  qrterminal.WHITE_WHITE,
-		QuietZone:  0,
+		QuietZone:  1,
 	})
-	qrOutput := buf.String()
-	// Trim trailing newline from QR code
-	qrOutput = strings.TrimSuffix(qrOutput, "\n")
+	sb.WriteString(strings.TrimSuffix(buf.String(), "\n"))
+	sb.WriteString("\n\n")
 
-	// Build content inside the box: QR code + instructions + countdown
-	var boxContent strings.Builder
-	boxContent.WriteString(qrOutput)
-	boxContent.WriteString("\n\n")
-
-	// Instructions
-	boxContent.WriteString(authStepStyle.Render("1. Open WhatsApp on your phone"))
-	boxContent.WriteString("\n")
-	boxContent.WriteString(authStepStyle.Render("2. Go to Settings → Linked Devices"))
-	boxContent.WriteString("\n")
-	boxContent.WriteString(authStepStyle.Render("3. Tap \"Link a Device\" and scan above"))
-	boxContent.WriteString("\n\n")
-
-	// Countdown timer
+	// Instructions + countdown inside the border — plain styled text only,
+	// no ANSI-heavy content, so lipgloss measures widths correctly.
 	const refreshInterval = 20 * time.Second
 	elapsed := time.Since(m.refreshedAt)
 	remaining := refreshInterval - elapsed
@@ -106,9 +97,16 @@ func (m AuthScreen) View() string {
 		remaining = 0
 	}
 	countdownSecs := int(remaining.Seconds())
+
+	var boxContent strings.Builder
+	boxContent.WriteString(authStepStyle.Render("1. Open WhatsApp on your phone"))
+	boxContent.WriteString("\n")
+	boxContent.WriteString(authStepStyle.Render("2. Go to Settings → Linked Devices"))
+	boxContent.WriteString("\n")
+	boxContent.WriteString(authStepStyle.Render("3. Tap \"Link a Device\" and scan above"))
+	boxContent.WriteString("\n\n")
 	boxContent.WriteString(authDimStyle.Render(fmt.Sprintf("Code refreshes in %ds", countdownSecs)))
 
-	// Render the entire box with border
 	sb.WriteString(authBorderStyle.Render(boxContent.String()))
 
 	return sb.String()
